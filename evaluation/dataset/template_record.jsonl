@@ -1,0 +1,1 @@
+{"id": "TEMPLATE-000", "question": "<question text>", "category": "Admissions", "question_kind": "retrieval", "answerable": "unknown", "expected_sources": [], "expected_doc_ids": [], "expected_keywords": [], "candidate_sources": [], "expect_official_referral": null, "verification_status": "needs_ground_truth", "verified_by": "", "verified_on": "", "notes": ""}

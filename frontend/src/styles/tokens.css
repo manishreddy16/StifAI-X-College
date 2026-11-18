@@ -1,0 +1,90 @@
+/* =========================================================================
+   STIF Campus AI — design tokens
+   Direction: "Ivory & Ink". A warm, light-only palette (ivory, champagne,
+   sage, teal, restrained navy). There is deliberately no dark theme.
+   ========================================================================= */
+:root {
+  color-scheme: light;
+
+  /* Ivory / champagne / beige surfaces */
+  --ivory-50: #fdfbf7;
+  --ivory-100: #faf6ee;   /* page background */
+  --ivory-200: #f4eee1;
+  --champagne-100: #f6ecd8;
+  --champagne-200: #efe3cb;
+  --champagne-300: #e6d6b8;
+  --beige-400: #d6c4a0;
+
+  /* Sage + teal accents */
+  --sage-50: #f0f4ee;
+  --sage-100: #e6ede3;
+  --sage-200: #d2ddce;
+  --sage-300: #b4c7b0;
+  --sage-500: #7d9a88;
+  --sage-700: #4f6f5c;
+  --teal-100: #dcece9;
+  --teal-300: #8fc2bb;
+  --teal-500: #2c8379;
+  --teal-600: #1e6e68;    /* primary accent (AA on ivory) */
+  --teal-700: #17585a;
+
+  /* Navy for text + selected elements */
+  --navy-950: #0f1a2e;
+  --navy-900: #16233b;    /* primary ink */
+  --navy-800: #1f2f4d;
+  --navy-700: #2d3f63;
+
+  /* Text */
+  --text: var(--navy-900);
+  --text-muted: #556077;
+  --text-subtle: #555d73;
+
+  /* Lines + status */
+  --line: #e7dfcc;
+  --line-strong: #d9ceb4;
+  --danger-bg: #fbeee9;
+  --danger-line: #efcdc1;
+  --danger-text: #8f3b27;
+  --success-bg: var(--sage-100);
+
+  /* Elevation — soft, warm-tinted shadows */
+  --shadow-xs: 0 1px 2px rgb(60 45 20 / 0.05);
+  --shadow-sm: 0 2px 8px rgb(60 45 20 / 0.06), 0 1px 2px rgb(60 45 20 / 0.04);
+  --shadow-md: 0 10px 28px rgb(60 45 20 / 0.08), 0 2px 6px rgb(60 45 20 / 0.04);
+  --shadow-lg: 0 24px 56px rgb(40 32 18 / 0.12), 0 4px 12px rgb(40 32 18 / 0.05);
+  --ring: 0 0 0 3px rgb(44 131 121 / 0.28);
+
+  /* Gradients (used selectively) */
+  --grad-champagne: linear-gradient(145deg, #fbf4e4 0%, #f2e6cd 100%);
+  --grad-sage: linear-gradient(145deg, #eef3ea 0%, #dbe6d6 100%);
+  --grad-teal: linear-gradient(145deg, #2c8379 0%, #1e6e68 100%);
+  --grad-navy: linear-gradient(145deg, #243759 0%, #16233b 100%);
+
+  /* Shape */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 30px;
+  --r-pill: 999px;
+
+  /* Type */
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-body: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Layout */
+  --header-h: 72px;
+  --container: 1200px;
+  --gutter: clamp(18px, 4vw, 40px);
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 640ms;
+}
+
+@media (max-width: 720px) {
+  :root { --header-h: 64px; }
+}

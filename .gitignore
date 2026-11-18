@@ -1,0 +1,61 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python virtual environments, bytecode, and tool caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.tox/
+.nox/
+.cache/
+.venv-cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+
+# Node dependencies, logs, and generated frontend bundle
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+frontend/dist/
+
+# Generated ingestion inputs, indexes, reports, and staging data
+data/raw/
+data/processed/
+data/raw_fast/
+data/processed_fast/
+data/index/
+data/index_fast/*
+!data/index_fast/chunks.jsonl
+data/reports/
+data/.staging/
+evaluation/reports/
+data/fast_discovered_urls.txt
+
+# Local logs, temporary files, and OS metadata
+*.log*
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local workspace artifacts unrelated to the project deliverable
+/Microsoft/Windows/PowerShell/ModuleAnalysisCache
+/placement_test.json
+/README-UPDATE.txt
+/package-lock.json
