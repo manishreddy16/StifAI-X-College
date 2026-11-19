@@ -1,8 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowRight, Menu, X } from "lucide-react";
 import Brand from "./Brand.jsx";
+import { useAuth } from "../lib/auth.jsx";
 
-export default function Header({ page, navigate }) {
+export default function Header({ page, navigate, notify }) {
+  const { user, logout } = useAuth();
+  const accountTarget = user ? (user.role === "admin" ? "admin" : "dashboard") : "login";
+  const accountLabel = user ? (user.role === "admin" ? "Admin" : "Dashboard") : "Sign in";
+  const accountPage = user ? (user.role === "admin" ? "admin" : "dashboard") : "login";
+  // Navigate home FIRST so a protected page unmounts before the session disappears (otherwise its guard would redirect to login).
+  const signOut = async () => { navigate("home"); await logout(); notify?.("You have been signed out."); };
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const toggleRef = useRef(null);
@@ -56,12 +63,15 @@ export default function Header({ page, navigate }) {
 
   return (
     <header className={`header ${scrolled ? "is-scrolled" : ""}`}>
-      <div className={`container header-inner ${page === "assistant" ? "container--wide" : ""}`}>
+      <div className={`container header-inner ${page === "assistant" || page === "admin" ? "container--wide" : ""}`}>
         <Brand onClick={go("home")} />
         <nav className="nav" aria-label="Primary">
           <a className="nav-link" href="#home" aria-current={page === "home" ? "page" : undefined} onClick={go("home")}>Home</a>
           <a className="nav-link" href="#explore" onClick={go("explore")}>Explore</a>
           <a className="nav-link" href="#about" onClick={go("about")}>About</a>
+          <a className="nav-link" href="#enquiry" aria-current={page === "enquiry" ? "page" : undefined} onClick={go("enquiry")}>Enquire</a>
+          <a className="nav-link" href={`#${accountTarget}`} aria-current={page === accountPage ? "page" : undefined} onClick={go(accountTarget)}>{accountLabel}</a>
+          {user && <button type="button" className="nav-link" onClick={signOut}>Sign out</button>}
           <a className="btn btn--primary btn--sm" href="#assistant" aria-current={page === "assistant" ? "page" : undefined} onClick={go("assistant")}>
             Open assistant <ArrowRight size={16} className="btn-arrow" />
           </a>
@@ -77,6 +87,9 @@ export default function Header({ page, navigate }) {
         <a href="#home" onClick={go("home")}>Home <ArrowRight size={20} /></a>
         <a href="#explore" onClick={go("explore")}>Explore <ArrowRight size={20} /></a>
         <a href="#about" onClick={go("about")}>About <ArrowRight size={20} /></a>
+        <a href="#enquiry" onClick={go("enquiry")}>Admissions enquiry <ArrowRight size={20} /></a>
+        <a href={`#${accountTarget}`} onClick={go(accountTarget)}>{accountLabel} <ArrowRight size={20} /></a>
+        {user && <button type="button" className="mobile-link" onClick={() => { setOpen(false); signOut(); }}>Sign out <ArrowRight size={20} /></button>}
         <a className="btn btn--primary" href="#assistant" onClick={go("assistant")}>Open the AI assistant <ArrowRight size={18} /></a>
         <small>Answers come from available SVCE information. Verify important details with official sources.</small>
       </nav>

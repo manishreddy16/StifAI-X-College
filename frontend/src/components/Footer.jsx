@@ -20,6 +20,9 @@ export default function Footer({ navigate }) {
               <li><a className="footer-link" href="#explore" onClick={go("explore")}>Suggested questions</a></li>
               <li><a className="footer-link" href="#about" onClick={go("about")}>What it can do</a></li>
               <li><a className="footer-link" href="#assistant" onClick={go("assistant")}>AI assistant</a></li>
+              <li><a className="footer-link" href="#enquiry" onClick={go("enquiry")}>Admissions enquiry</a></li>
+              <li><a className="footer-link" href="#login" onClick={go("login")}>Student sign-in</a></li>
+              <li><a className="footer-link" href="#admin/login" onClick={go("admin/login")}>Staff sign-in</a></li>
             </ul>
           </nav>
           <div>

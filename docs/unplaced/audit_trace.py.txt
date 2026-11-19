@@ -1,0 +1,42 @@
+import sys, os, json, collections, tempfile
+sys.path.insert(0,'.')
+from pathlib import Path
+from evaluation.synthetic.corpus import build_chunks_file
+chunks = build_chunks_file(tempfile.mkdtemp())
+os.environ.update(LLM_API_KEY="fake", LLM_MODEL="fake-model", LLM_BASE_URL="http://fake.invalid/v1")
+from api import retrieval
+retrieval.FAST_CHUNKS_PATH = chunks
+retrieval.OLD_CHUNKS_PATH = chunks.with_name("none.jsonl")
+retrieval._reset_state_for_tests()
+captured = {}
+class R:
+    status_code=200
+    def raise_for_status(self): pass
+    def json(self): return {"choices":[{"message":{"content":"STUB ANSWER"}}]}
+def fake_post(url, headers=None, json=None, timeout=None):
+    captured.update(url=url, json=json, has_auth_header=bool(headers and headers.get("Authorization")), timeout=timeout)
+    return R()
+retrieval.requests.post = fake_post
+from fastapi.testclient import TestClient
+from api.main import app
+calls = collections.OrderedDict()
+order=[]
+def prof(frame, event, arg):
+    if event!="call": return
+    f=frame.f_code.co_filename
+    if f.endswith(("api/retrieval.py","api/main.py","ingestion/index_publisher.py")):
+        n=frame.f_code.co_name
+        if n not in calls: order.append(n)
+        calls[n]=calls.get(n,0)+1
+q = sys.argv[1]
+c = TestClient(app); c.get("/health"); calls.clear(); order.clear()
+import threading; threading.setprofile(prof); sys.setprofile(prof)
+r = c.post("/api/v1/chat", json={"message": q})
+sys.setprofile(None); threading.setprofile(None)
+print("QUESTION:", q); print("HTTP", r.status_code, "mode=",r.json()["mode"], "sources=",r.json()["sources"])
+print("CALL ORDER (first occurrence, count):"); print(" -> ".join(f"{n}x{calls[n]}" for n in order))
+if captured:
+    user = captured["json"]["messages"][1]["content"]
+    print("LLM url:", captured["url"], "| auth header set:", captured["has_auth_header"], "| max_tokens:", captured["json"]["max_tokens"], "| payload chars:", len(user))
+    import re; print("sources in context:", re.findall(r"URL: (\S+)", user))
+else: print("LLM NOT CALLED")

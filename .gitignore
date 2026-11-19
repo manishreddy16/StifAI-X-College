@@ -59,3 +59,9 @@ Desktop.ini
 /placement_test.json
 /README-UPDATE.txt
 /package-lock.json
+
+# Campus AI application database (user accounts and enquiries - personal data)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.sqlite*

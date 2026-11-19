@@ -22,6 +22,7 @@ from api.retrieval import (
     reload_index,
 )
 from ingestion.run_ingestion import run_ingestion
+from api.campus import ADMIN_ONLY, install_campus_routes
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,9 +38,12 @@ app.add_middleware(
         "http://127.0.0.1:5173",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
+
+# Student enquiries, authentication and admin dashboard APIs (see api/campus.py).
+install_campus_routes(app)
 
 if (FRONTEND_DIST / "assets").is_dir():
     app.mount(
@@ -164,7 +168,7 @@ async def extract_uploaded_file(file: UploadFile = File(...)):
     return {"filename": filename, "file_type": file_type, "text": text}
 
 
-@app.get("/api/v1/ingest/status")
+@app.get("/api/v1/ingest/status", dependencies=ADMIN_ONLY)
 def ingestion_status():
     return {
         "job": dict(_ingest_state),
@@ -180,7 +184,7 @@ def index_status():
     return get_index_status()
 
 
-@app.post("/api/v1/index/reload")
+@app.post("/api/v1/index/reload", dependencies=ADMIN_ONLY)
 def index_reload():
     """Load the latest published index without restarting.
 
@@ -232,7 +236,7 @@ def _run_ingest_task(start_url: str, max_pages: int):
         _ingest_state.update(status="failed", message=str(exc))
 
 
-@app.post("/api/v1/ingest/run")
+@app.post("/api/v1/ingest/run", dependencies=ADMIN_ONLY)
 def start_ingestion(
     background_tasks: BackgroundTasks,
     max_pages: int | None = None,
