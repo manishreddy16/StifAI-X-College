@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -31,6 +32,7 @@ from api.retrieval import (
     load_latest_report,
     reload_index,
 )
+from api.startup_diagnostics import startup_phase
 from ingestion.run_ingestion import run_ingestion
 from api.campus import ADMIN_ONLY, install_campus_routes
 
@@ -39,6 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 app = FastAPI(title="STIF.ai SVCE College Assistant", version="0.1.0")
+LOGGER = logging.getLogger(__name__)
 
 
 def configured_cors_origins() -> list[str]:
@@ -83,12 +86,21 @@ def _check_production_database() -> None:
     enforce_production_database()
     if storage_backend() == "r2":
         try:
-            result = get_storage().materialize_active()
+            with startup_phase(LOGGER, "s3.materialize_active") as phase:
+                result = get_storage().materialize_active()
+                for key in ("files", "bytes"):
+                    value = result.get(key)
+                    if isinstance(value, int):
+                        phase[key] = value
         except StorageError:
             raise RuntimeError("Persistent knowledge-artifact storage is unavailable.") from None
         if not result.get("generation"):
             raise RuntimeError("Persistent knowledge-artifact storage has no active generation.")
-        reload_index()
+        with startup_phase(LOGGER, "retrieval.reload_index") as phase:
+            index_status = reload_index()
+            chunks = index_status.get("chunks_loaded")
+            if isinstance(chunks, int):
+                phase["chunks"] = chunks
 
 # Permit the local Vite frontend to call this API.
 app.add_middleware(

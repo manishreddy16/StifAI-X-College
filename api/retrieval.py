@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from rank_bm25 import BM25Okapi
 
 from api import retrieval_quality as quality
+from api.startup_diagnostics import startup_phase
 from ingestion.index_publisher import read_chunks, sha256_of
 
 load_dotenv()
@@ -241,7 +242,9 @@ def _safe_sha256(path: Path) -> str:
 
 def _build_state(path: Path, priority: int, signature: tuple) -> _RetrievalState:
     """Fully build a state from one file. Raises on any problem."""
-    raw_chunks, _invalid, _total = read_chunks(path)
+    with startup_phase(LOGGER, "retrieval.read_chunks") as phase:
+        raw_chunks, _invalid, _total = read_chunks(path)
+        phase["chunks"] = len(raw_chunks)
     if len(raw_chunks) < max(1, INDEX_MIN_CHUNKS):
         raise ValueError(
             f"{path} has {len(raw_chunks)} valid chunks (minimum {max(1, INDEX_MIN_CHUNKS)})"
@@ -252,14 +255,24 @@ def _build_state(path: Path, priority: int, signature: tuple) -> _RetrievalState
         chunks.append(item)
     quality_index, quality_error = None, None
     try:
-        quality_index = quality.QualityIndex.build(chunks, BM25Okapi)
+        with startup_phase(
+            LOGGER,
+            "retrieval.QualityIndex.build",
+            details={"chunks": len(chunks)},
+        ):
+            quality_index = quality.QualityIndex.build(chunks, BM25Okapi)
     except Exception as exc:  # never reject a valid index because of the optional layer
         quality_error = f"{type(exc).__name__}: {exc}"
         LOGGER.warning("Improved retrieval index not built, using legacy scoring: %s", quality_error)
     chunk_snapshot = tuple(chunks)
     legacy_bm25 = _LazyBM25(chunk_snapshot)
     if quality_index is None:
-        legacy_bm25.get()
+        with startup_phase(
+            LOGGER,
+            "retrieval.legacy_bm25_fallback",
+            details={"chunks": len(chunk_snapshot)},
+        ):
+            legacy_bm25.get()
     return _RetrievalState(
         chunks=chunk_snapshot,
         legacy_bm25=legacy_bm25,
