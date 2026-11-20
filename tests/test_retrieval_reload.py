@@ -188,6 +188,95 @@ class ReloadTests(RetrievalCase):
         self.assertIn("bm25 boom", result["last_error"])
 
 
+class LazyLegacyIndexTests(RetrievalCase):
+    def test_improved_mode_does_not_build_legacy_bm25(self):
+        write_chunks(self.old, make_chunks("improved"))
+        original_bm25 = retrieval.BM25Okapi
+        builds = []
+
+        def build(corpus, *args, **kwargs):
+            builds.append(1)
+            return original_bm25(corpus, *args, **kwargs)
+
+        with mock.patch.object(retrieval, "BM25Okapi", side_effect=build):
+            retrieval.load_chunks()
+            self.assertTrue(retrieval.retrieve(QUERY, mode="improved"))
+            self.assertEqual(len(builds), 2)
+
+    def test_legacy_mode_builds_once_and_remains_available(self):
+        write_chunks(self.old, make_chunks("legacy"))
+        original_bm25 = retrieval.BM25Okapi
+        builds = []
+
+        def build(corpus, *args, **kwargs):
+            builds.append(1)
+            return original_bm25(corpus, *args, **kwargs)
+
+        with mock.patch.object(retrieval, "BM25Okapi", side_effect=build):
+            retrieval.load_chunks()
+            self.assertTrue(retrieval.retrieve(QUERY, mode="legacy"))
+            self.assertEqual(len(builds), 3)
+            self.assertTrue(retrieval.retrieve(QUERY, mode="legacy"))
+            self.assertEqual(len(builds), 3)
+
+    def test_improved_mode_fallback_builds_legacy_index_once(self):
+        write_chunks(self.old, make_chunks("fallback"))
+        original_bm25 = retrieval.BM25Okapi
+        builds = []
+
+        def build(corpus, *args, **kwargs):
+            builds.append(1)
+            return original_bm25(corpus, *args, **kwargs)
+
+        with (
+            mock.patch.object(retrieval.quality.QualityIndex, "build",
+                              side_effect=RuntimeError("improved index unavailable")),
+            mock.patch.object(retrieval, "BM25Okapi", side_effect=build),
+        ):
+            retrieval.load_chunks()
+            self.assertFalse(retrieval.get_index_status()["improved_index_ready"])
+            self.assertEqual(len(builds), 1)
+            self.assertTrue(retrieval.retrieve(QUERY, mode="improved"))
+            self.assertEqual(len(builds), 1)
+            self.assertTrue(retrieval.retrieve(QUERY, mode="improved"))
+            self.assertEqual(len(builds), 1)
+
+    def test_concurrent_legacy_requests_build_index_once(self):
+        write_chunks(self.old, make_chunks("concurrent"))
+        retrieval.load_chunks()
+        original_bm25 = retrieval.BM25Okapi
+        builds = []
+        build_lock = threading.Lock()
+        barrier = threading.Barrier(8)
+        results = []
+        errors = []
+
+        def build(corpus, *args, **kwargs):
+            with build_lock:
+                builds.append(1)
+            return original_bm25(corpus, *args, **kwargs)
+
+        def retrieve():
+            try:
+                barrier.wait(timeout=5)
+                results.append(retrieval.retrieve(QUERY, mode="legacy"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        with mock.patch.object(retrieval, "BM25Okapi", side_effect=build):
+            workers = [threading.Thread(target=retrieve) for _ in range(8)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=20)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 8)
+        self.assertTrue(all(results))
+        self.assertEqual(len(builds), 1)
+
+
 class ServingStatusTests(RetrievalCase):
     """describe_serving backs the ingestion status: is the published index really served?"""
 

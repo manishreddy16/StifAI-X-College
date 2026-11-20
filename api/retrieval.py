@@ -90,14 +90,14 @@ def get_retrieval_mode() -> str:
 
 @dataclass(frozen=True)
 class _RetrievalState:
-    """Chunks and the BM25 index built from them, always used together.
+    """Chunks and retrieval indexes for the same source, always used together.
 
-    Instances are immutable and replaced as a whole, so a reader holding a
-    reference can never see chunks from one index and scores from another.
+    States are replaced as a whole; the legacy index holder initializes only
+    once and remains bound to that state's chunks.
     """
 
     chunks: tuple
-    bm25: Any
+    legacy_bm25: _LazyBM25
     source: str
     priority: int
     signature: tuple
@@ -107,6 +107,25 @@ class _RetrievalState:
     # not be built; retrieval then transparently uses the legacy scorer.
     quality: Any = None
     quality_error: str | None = None
+
+
+class _LazyBM25:
+    """Build the legacy scorer once, only when legacy retrieval is needed."""
+
+    def __init__(self, chunks: tuple[dict[str, Any], ...]) -> None:
+        self._chunks = chunks
+        self._index: Any | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> Any:
+        with self._lock:
+            if self._index is None:
+                tokenized = [
+                    _tokens(f"{chunk.get('title', '')} {chunk.get('text', '')}")
+                    for chunk in self._chunks
+                ]
+                self._index = BM25Okapi(tokenized)
+            return self._index
 
 
 _STATE: _RetrievalState | None = None
@@ -231,19 +250,19 @@ def _build_state(path: Path, priority: int, signature: tuple) -> _RetrievalState
     for item in raw_chunks:
         _normalise_metadata(item)
         chunks.append(item)
-    tokenized = [
-        _tokens(f"{chunk.get('title', '')} {chunk.get('text', '')}")
-        for chunk in chunks
-    ]
     quality_index, quality_error = None, None
     try:
         quality_index = quality.QualityIndex.build(chunks, BM25Okapi)
     except Exception as exc:  # never reject a valid index because of the optional layer
         quality_error = f"{type(exc).__name__}: {exc}"
         LOGGER.warning("Improved retrieval index not built, using legacy scoring: %s", quality_error)
+    chunk_snapshot = tuple(chunks)
+    legacy_bm25 = _LazyBM25(chunk_snapshot)
+    if quality_index is None:
+        legacy_bm25.get()
     return _RetrievalState(
-        chunks=tuple(chunks),
-        bm25=BM25Okapi(tokenized),
+        chunks=chunk_snapshot,
+        legacy_bm25=legacy_bm25,
         source=str(path),
         priority=priority,
         signature=signature,
@@ -790,7 +809,7 @@ def _retrieve_legacy(
         return []
 
     chunks = state.chunks
-    bm25 = state.bm25
+    bm25 = state.legacy_bm25.get()
 
     topics = _detect_topics(query)
     query_lower = query.lower()
