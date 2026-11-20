@@ -3,10 +3,9 @@ services:
     name: stif-campus-ai-api
     runtime: python
     region: singapore
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements-local.txt -r requirements-additions.txt
-    preDeployCommand: python -m api.manage init-db
-    startCommand: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m api.manage init-db && python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     envVars:
       - key: STIF_ENV
