@@ -44,7 +44,7 @@ class IndexCase(unittest.TestCase):
             p = mock.patch.object(retrieval, name, value)
             p.start()
             self.addCleanup(p.stop)
-        e = mock.patch.dict(os.environ, {"LLM_API_KEY": "", "LLM_MODEL": ""})  # no LLM: retrieval only
+        e = mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "", "OPENROUTER_MODEL": ""})  # no LLM: retrieval only
         e.start()
         self.addCleanup(e.stop)
         os.environ.pop("RETRIEVAL_MODE", None)

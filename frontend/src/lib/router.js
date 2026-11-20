@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
  * Tiny hash router that extends the app's existing "#home / #assistant" scheme.
  * "#admin/enquiries/12?x=1" -> { name: "admin", parts: ["enquiries","12"], params: {x:"1"} }
  */
-export const SECTIONS = ["explore", "about"];
+export const SECTIONS = ["admissions", "explore", "support", "about"];
 
 export function parseHash(hash = window.location.hash) {
   const raw = hash.replace(/^#\/?/, "");

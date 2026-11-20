@@ -264,7 +264,7 @@ export default function Assistant({ messages, setMessages, initial, clear, notif
             </button>
           </div>
 
-          <div className="thread" ref={threadRef} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" tabIndex={-1} aria-busy={loading}>
+          <div className="thread" ref={threadRef} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" tabIndex={0} aria-busy={loading}>
             <div className="thread-inner">
               {empty && !loading && (
                 <div className="empty">

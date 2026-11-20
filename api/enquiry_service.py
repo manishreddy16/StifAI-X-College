@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import sqlite3
 from datetime import datetime, timedelta
 
 from api import db
@@ -51,28 +50,28 @@ def _norm_key(text: str) -> str:
 
 # ---------------------------------------------------------------- programmes
 
-def list_programmes(conn, *, active_only: bool = True) -> list[dict]:
+def list_programmes(conn: db.Connection, *, active_only: bool = True) -> list[dict]:
     sql = "SELECT id, name, is_active FROM programmes"
     if active_only:
-        sql += " WHERE is_active = 1"
+        sql += " WHERE is_active = TRUE"
     return [{"id": r["id"], "name": r["name"], "is_active": bool(r["is_active"])}
-            for r in conn.execute(sql + " ORDER BY name COLLATE NOCASE")]
+            for r in conn.execute(sql + " ORDER BY lower(name), name")]
 
 
-def add_programme(conn, name: object, now: datetime | None = None) -> dict:
+def add_programme(conn: db.Connection, name: object, now: datetime | None = None) -> dict:
     clean = " ".join(clean_text(name).split())
     if not (2 <= len(clean) <= 120):
         raise ValidationFailed({"name": "Enter a programme name (2-120 characters)."})
     try:
-        cur = conn.execute("INSERT INTO programmes (name, name_key, created_at) VALUES (?, ?, ?)",
-                           (clean, _norm_key(clean), db.iso(now or db.utcnow())))
-    except sqlite3.IntegrityError as exc:
+        programme_id = conn.insert_id("INSERT INTO programmes (name, name_key, created_at) VALUES (?, ?, ?)",
+                                      (clean, _norm_key(clean), db.db_timestamp(now or db.utcnow())))
+    except db.IntegrityError as exc:
         raise ValidationFailed({"name": "That programme already exists."}) from exc
-    return {"id": cur.lastrowid, "name": clean, "is_active": True}
+    return {"id": programme_id, "name": clean, "is_active": True}
 
 
-def set_programme_active(conn, programme_id: int, active: bool) -> dict:
-    cur = conn.execute("UPDATE programmes SET is_active = ? WHERE id = ?", (1 if active else 0, programme_id))
+def set_programme_active(conn: db.Connection, programme_id: int, active: bool) -> dict:
+    cur = conn.execute("UPDATE programmes SET is_active = ? WHERE id = ?", (active, programme_id))
     if cur.rowcount == 0:
         raise NotFound("Programme not found.")
     r = conn.execute("SELECT id, name, is_active FROM programmes WHERE id = ?", (programme_id,)).fetchone()
@@ -81,7 +80,7 @@ def set_programme_active(conn, programme_id: int, active: bool) -> dict:
 
 # ---------------------------------------------------------------- enquiries
 
-def validate_enquiry(conn, data: dict) -> dict:
+def validate_enquiry(conn: db.Connection, data: dict) -> dict:
     """Validate a raw submission. Returns cleaned values or raises ValidationFailed with per-field messages."""
     problems: dict[str, str] = {}
     name = clean_name(data.get("full_name"))
@@ -112,7 +111,7 @@ def validate_enquiry(conn, data: dict) -> dict:
             pid = int(programme_id)
         except (TypeError, ValueError):
             pid = -1
-        row = conn.execute("SELECT id, name FROM programmes WHERE id = ? AND is_active = 1", (pid,)).fetchone()
+        row = conn.execute("SELECT id, name FROM programmes WHERE id = ? AND is_active = TRUE", (pid,)).fetchone()
         if row is None:
             problems["programme_id"] = "Choose a programme from the list."
         else:
@@ -131,34 +130,37 @@ def _dedupe_hash(v: dict) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def submit_enquiry(conn, data: dict, *, user: AuthUser | None = None, now: datetime | None = None) -> dict:
+def submit_enquiry(conn: db.Connection, data: dict, *, user: AuthUser | None = None, now: datetime | None = None) -> dict:
     """Validate and persist. Returns {"enquiry": {...}, "duplicate": bool}. Nothing is reported saved unless committed."""
     now = now or db.utcnow()
     v = validate_enquiry(conn, data)
     digest = _dedupe_hash(v)
     with db.transaction(conn, immediate=True):  # serialises double-clicks / concurrent identical submits
+        # SQLite's immediate transaction serializes writers; PostgreSQL uses a
+        # transaction-scoped advisory lock keyed by email for the same guarantee.
+        conn.lock_key("enquiry-email:" + v["email"])
         existing = conn.execute(
             "SELECT * FROM enquiries WHERE dedupe_hash = ? AND created_at > ? ORDER BY id LIMIT 1",
-            (digest, db.iso(now - DUPLICATE_WINDOW)),
+            (digest, db.db_timestamp(now - DUPLICATE_WINDOW)),
         ).fetchone()
         if existing is not None:
             return {"enquiry": _public_receipt(existing), "duplicate": True}
         recent = conn.execute("SELECT COUNT(*) FROM enquiries WHERE email = ? AND created_at > ?",
-                              (v["email"], db.iso(now - timedelta(days=1)))).fetchone()[0]
+                              (v["email"], db.db_timestamp(now - timedelta(days=1)))).fetchone()[0]
         if recent >= MAX_PER_EMAIL_PER_DAY:
             raise RateLimited("You have sent several enquiries today. Please wait for our reply before sending more.",
                               code="too_many_enquiries")
-        stamp = db.iso(now)
-        cur = conn.execute(
+        stamp = db.db_timestamp(now)
+        enquiry_id = conn.insert_id(
             """INSERT INTO enquiries (user_id, full_name, email, phone, programme_id, programme_label, message,
                    consent, consent_version, consent_at, dedupe_hash, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user.id if user else None, v["full_name"], v["email"], v["phone"], v["programme_id"],
-             v["programme_label"], v["message"], CONSENT_VERSION, stamp, digest, stamp, stamp),
+             v["programme_label"], v["message"], True, CONSENT_VERSION, stamp, digest, stamp, stamp),
         )
-        reference = f"ENQ-{now.year}-{cur.lastrowid:06d}"
-        conn.execute("UPDATE enquiries SET reference = ? WHERE id = ?", (reference, cur.lastrowid))
-        row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (cur.lastrowid,)).fetchone()
+        reference = f"ENQ-{now.year}-{enquiry_id:06d}"
+        conn.execute("UPDATE enquiries SET reference = ? WHERE id = ?", (reference, enquiry_id))
+        row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (enquiry_id,)).fetchone()
     return {"enquiry": _public_receipt(row), "duplicate": False}
 
 
@@ -181,7 +183,7 @@ def _admin_dict(row, *, detail: bool) -> dict:
     return d
 
 
-def list_for_user(conn, user: AuthUser) -> list[dict]:
+def list_for_user(conn: db.Connection, user: AuthUser) -> list[dict]:
     rows = conn.execute("SELECT * FROM enquiries WHERE user_id = ? ORDER BY id DESC LIMIT 100", (user.id,))
     return [{**_public_receipt(r), "message": r["message"]} for r in rows]
 
@@ -190,7 +192,7 @@ def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def list_enquiries(conn, *, status: str | None = None, programme_id: int | None = None, q: str | None = None,
+def list_enquiries(conn: db.Connection, *, status: str | None = None, programme_id: int | None = None, q: str | None = None,
                    page: int = 1, page_size: int = 20) -> dict:
     where, args = [], []
     if status:
@@ -215,14 +217,14 @@ def list_enquiries(conn, *, status: str | None = None, programme_id: int | None 
             "page_size": page_size, "pages": max(1, -(-total // page_size))}
 
 
-def get_enquiry(conn, enquiry_id: int) -> dict:
+def get_enquiry(conn: db.Connection, enquiry_id: int) -> dict:
     row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (enquiry_id,)).fetchone()
     if row is None:
         raise NotFound("Enquiry not found.")
     return _admin_dict(row, detail=True)
 
 
-def update_enquiry(conn, enquiry_id: int, *, status: str | None = None, admin_notes: str | None = None,
+def update_enquiry(conn: db.Connection, enquiry_id: int, *, status: str | None = None, admin_notes: str | None = None,
                    now: datetime | None = None) -> dict:
     sets, args, problems = [], [], {}
     if status is not None:
@@ -238,29 +240,32 @@ def update_enquiry(conn, enquiry_id: int, *, status: str | None = None, admin_no
         raise ValidationFailed(problems)
     if not sets:
         raise ValidationFailed({"status": "Nothing to update."})
-    sets.append("updated_at = ?"); args.append(db.iso(now or db.utcnow()))
+    sets.append("updated_at = ?"); args.append(db.db_timestamp(now or db.utcnow()))
     cur = conn.execute(f"UPDATE enquiries SET {', '.join(sets)} WHERE id = ?", args + [enquiry_id])
     if cur.rowcount == 0:
         raise NotFound("Enquiry not found.")
     return get_enquiry(conn, enquiry_id)
 
 
-def stats(conn, *, now: datetime | None = None) -> dict:
+def stats(conn: db.Connection, *, now: datetime | None = None) -> dict:
     now = now or db.utcnow()
     by_status = {s: 0 for s in STATUSES}
     for r in conn.execute("SELECT status, COUNT(*) c FROM enquiries GROUP BY status"):
         by_status[r["status"]] = r["c"]
     total = sum(by_status.values())
-    day_start = db.iso(now.replace(hour=0, minute=0, second=0))
+    day_start = db.db_timestamp(now.replace(hour=0, minute=0, second=0, microsecond=0))
     today = conn.execute("SELECT COUNT(*) FROM enquiries WHERE created_at >= ?", (day_start,)).fetchone()[0]
     last7 = conn.execute("SELECT COUNT(*) FROM enquiries WHERE created_at >= ?",
-                         (db.iso(now - timedelta(days=7)),)).fetchone()[0]
+                         (db.db_timestamp(now - timedelta(days=7)),)).fetchone()[0]
     programmes = [{"programme": r["programme_label"], "count": r["c"]} for r in conn.execute(
         "SELECT programme_label, COUNT(*) c FROM enquiries GROUP BY programme_label ORDER BY c DESC, programme_label LIMIT 8")]
     daily = []
     for i in range(13, -1, -1):
-        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-        n = conn.execute("SELECT COUNT(*) FROM enquiries WHERE substr(created_at, 1, 10) = ?", (d,)).fetchone()[0]
+        day = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+        next_day = day + timedelta(days=1)
+        d = day.strftime("%Y-%m-%d")
+        n = conn.execute("SELECT COUNT(*) FROM enquiries WHERE created_at >= ? AND created_at < ?",
+                         (db.db_timestamp(day), db.db_timestamp(next_day))).fetchone()[0]
         daily.append({"date": d, "count": n})
     students = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'student'").fetchone()[0]
     return {"total": total, "by_status": by_status, "today": today, "last_7_days": last7,

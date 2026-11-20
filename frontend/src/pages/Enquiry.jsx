@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, CircleCheck, Loader2, MessageCircle, ShieldCheck } from "lucide-react";
+import { ArrowRight, CircleCheck, Clock, Loader2, MessageCircle, ShieldCheck } from "lucide-react";
 import { api } from "../lib/api.js";
 import { useAuth } from "../lib/auth.jsx";
 import { EMAIL_RE, formatDate } from "../lib/format.js";
@@ -31,6 +31,8 @@ export default function Enquiry({ navigate }) {
   useEffect(() => {
     if (user) setForm((f) => ({ ...f, full_name: f.full_name || user.full_name, email: f.email || user.email }));
   }, [user]);
+
+  useEffect(() => { if (formError) document.querySelector(".form-card .alert--error")?.scrollIntoView({ block: "center" }); }, [formError]);
 
   const set = (key) => (e) => { setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value })); setErrors((x) => ({ ...x, [key]: undefined })); };
   const lim = config?.limits || { message_min: 10, message_max: 2000 };
@@ -113,56 +115,88 @@ export default function Enquiry({ navigate }) {
   }
 
   return (
-    <main id="main" tabIndex={-1} className="container narrow section">
+    <main id="main" tabIndex={-1} className="container enq-page section">
       <PageHead eyebrow="Admissions enquiry" title="Ask the SVCE admissions team">
-        Send your question and contact details. For quick answers about fees, departments or placements, try the{" "}
-        <a className="text-link" href="#assistant" onClick={go("assistant")}>campus assistant</a> first.
+        Send your question and contact details to the admissions team at Sri Venkateswara College of Engineering, Tirupati.
       </PageHead>
 
-      {!user && <Alert kind="info">Have an account? <a className="text-link" href="#login?next=enquiry" onClick={go("login?next=enquiry")}>Sign in</a> to track your enquiry status afterwards.</Alert>}
-      {loadError && <Alert kind="error">{loadError} You can still fill in the form; the programme list may be unavailable.</Alert>}
+      <div className="enq-layout">
+        <div className="enq-main">
+          {!user && <Alert kind="info">Have an account? <a className="text-link" href="#login?next=enquiry" onClick={go("login?next=enquiry")}>Sign in</a> to track your enquiry status afterwards. You can also send this form without signing in.</Alert>}
+          {loadError && <Alert kind="error">{loadError} You can still fill in the form; the programme list may be unavailable.</Alert>}
 
-      {!config && !loadError ? <Spinner label="Loading form…" /> : (
-        <form className="card form-card" onSubmit={onSubmit} noValidate>
-          {formError && <Alert kind="error">{formError}</Alert>}
-          <div className="form-grid">
-            <Field label="Full name" value={form.full_name} onChange={set("full_name")} error={errors.full_name} autoComplete="name" required maxLength={100} />
-            <Field label="Email" type="email" inputMode="email" value={form.email} onChange={set("email")} error={errors.email} autoComplete="email" required maxLength={254} />
-            <Field label="Phone number" type="tel" inputMode="tel" value={form.phone} onChange={set("phone")} error={errors.phone} autoComplete="tel" required
-              hint="10-digit Indian mobile number, or include your country code (+…)." maxLength={25} />
-            {programmes.length > 0 ? (
-              <Field as="select" label="Programme you are interested in" value={form.programme} onChange={set("programme")} error={errors.programme_id}>
-                <option value="">{config?.general_label || "General / not sure yet"}</option>
-                {programmes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                <option value="other">Other (type below)</option>
-              </Field>
-            ) : (
-              <Field label="Programme you are interested in" value={form.programme_other} onChange={set("programme_other")} error={errors.programme_other}
-                hint="Optional. Leave blank if you are not sure yet." maxLength={120} />
-            )}
-            {programmes.length > 0 && form.programme === "other" && (
-              <Field className="span-2" label="Programme name" value={form.programme_other} onChange={set("programme_other")} error={errors.programme_other} maxLength={120} />
-            )}
-            <div className="span-2">
-              <Field as="textarea" rows={6} label="Your question" value={form.message} onChange={set("message")} error={errors.message} required maxLength={lim.message_max + 200}
-                hint="Admission-related questions only, for example eligibility, process or documents." />
-              <p className={`counter ${form.message.length > lim.message_max ? "over" : ""}`} aria-live="off">{form.message.length} / {lim.message_max}</p>
-            </div>
-          </div>
+          {!config && !loadError ? <Spinner label="Loading form…" /> : (
+            <form className="card form-card" onSubmit={onSubmit} noValidate>
+              {formError && <Alert kind="error">{formError}</Alert>}
+              <h2 className="form-section">Your details</h2>
+              <div className="form-grid">
+                <Field label="Full name" value={form.full_name} onChange={set("full_name")} error={errors.full_name} autoComplete="name" required maxLength={100} />
+                <Field label="Email" type="email" inputMode="email" value={form.email} onChange={set("email")} error={errors.email} autoComplete="email" required maxLength={254} />
+                <Field label="Phone number" type="tel" inputMode="tel" value={form.phone} onChange={set("phone")} error={errors.phone} autoComplete="tel" required
+                  hint="10-digit Indian mobile number, or include your country code (+…)." maxLength={25} />
+                {programmes.length > 0 ? (
+                  <Field as="select" label="Programme you are interested in" value={form.programme} onChange={set("programme")} error={errors.programme_id}>
+                    <option value="">{config?.general_label || "General / not sure yet"}</option>
+                    {programmes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    <option value="other">Other (type below)</option>
+                  </Field>
+                ) : (
+                  <Field label="Programme you are interested in" value={form.programme_other} onChange={set("programme_other")} error={errors.programme_other}
+                    hint="Optional. Leave blank if you are not sure yet." maxLength={120} />
+                )}
+                {programmes.length > 0 && form.programme === "other" && (
+                  <Field className="span-2" label="Programme name" value={form.programme_other} onChange={set("programme_other")} error={errors.programme_other} maxLength={120} />
+                )}
+              </div>
 
-          <div className={`consent ${errors.consent ? "has-error" : ""}`}>
-            <label className="check">
-              <input type="checkbox" checked={form.consent} onChange={set("consent")} aria-invalid={errors.consent ? "true" : undefined} aria-describedby="consent-err" />
-              <span><ShieldCheck size={16} className="inline-icon" /> {config?.consent_text || "I agree that the details I enter may be stored and used by the college admissions team to respond to my enquiry."}</span>
-            </label>
-            {errors.consent && <p id="consent-err" className="field-error" role="alert">{errors.consent}</p>}
-          </div>
+              <h2 className="form-section">Your question</h2>
+              <div className="form-grid">
+                <div className="span-2">
+                  <Field as="textarea" rows={6} label="Your question" value={form.message} onChange={set("message")} error={errors.message} required maxLength={lim.message_max + 200}
+                    hint="Admission-related questions only, for example eligibility, process or documents." />
+                  <p className={`counter ${form.message.length > lim.message_max ? "over" : ""}`} aria-live="off">{form.message.length} / {lim.message_max}</p>
+                </div>
+              </div>
 
-          <button className="btn btn--primary" type="submit" disabled={busy}>
-            {busy ? <><Loader2 size={18} className="spin" /> Sending…</> : <>Send enquiry <ArrowRight size={18} className="btn-arrow" /></>}
-          </button>
-        </form>
-      )}
+              <h2 className="form-section">Consent</h2>
+              <div className={`consent ${errors.consent ? "has-error" : ""}`}>
+                <label className="check">
+                  <input type="checkbox" checked={form.consent} onChange={set("consent")} aria-invalid={errors.consent ? "true" : undefined} aria-describedby={errors.consent ? "consent-err" : undefined} />
+                  <span><ShieldCheck size={16} className="inline-icon" /> {config?.consent_text || "I agree that the details I enter may be stored and used by the college admissions team to respond to my enquiry."}</span>
+                </label>
+                {errors.consent && <p id="consent-err" className="field-error" role="alert">{errors.consent}</p>}
+              </div>
+              <p className="small muted consent-note">The consent wording and privacy notice are pending college approval.</p>
+
+              <button className="btn btn--primary btn--lg" type="submit" disabled={busy}>
+                {busy ? <><Loader2 size={18} className="spin" /> Sending…</> : <>Send enquiry <ArrowRight size={18} className="btn-arrow" /></>}
+              </button>
+            </form>
+          )}
+        </div>
+
+        <aside className="enq-side" aria-label="About this enquiry">
+          <section className="card enq-box">
+            <h2>What happens next</h2>
+            <ol className="enq-steps">
+              <li><b>You send the form.</b> Your details are stored with your consent.</li>
+              <li><b>You get a reference number</b> on screen. Keep it if you need to follow up.</li>
+              <li><b>The admissions team reviews</b> your question and contacts you using the email or phone you gave.</li>
+            </ol>
+            <p className="small muted">If you send the same enquiry again within a short time, it is not duplicated and you see the existing reference.</p>
+          </section>
+          <section className="card enq-box">
+            <h2>Need a quick answer?</h2>
+            <p>Try the AI assistant for questions about the college. It shows sources when available.</p>
+            <a className="btn btn--secondary btn--sm" href="#assistant" onClick={go("assistant")}><MessageCircle size={16} /> Ask the assistant</a>
+          </section>
+          <section className="card enq-box">
+            <h2>Admissions contact</h2>
+            <p>Phone and email of the admissions office will be listed here once approved by the college.</p>
+            <span className="pending-tag"><Clock size={13} aria-hidden="true" /> Pending college approval</span>
+          </section>
+        </aside>
+      </div>
     </main>
   );
 }

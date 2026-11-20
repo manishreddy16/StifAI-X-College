@@ -1,192 +1,193 @@
 import React from "react";
 import {
-  ArrowRight, ArrowDownRight, ArrowUpRight, BarChart3, Building2, FileText, GraduationCap,
-  Layers, MessageCircle, Mic, Paperclip, ShieldCheck, Sparkles, Zap, Link2, Search,
+  ArrowRight, Building2, ClipboardList, ExternalLink, FileText, GraduationCap, LogIn,
+  MessageCircle, ShieldCheck, UserPlus, Search, BookOpen, Phone, Zap, Clock,
 } from "lucide-react";
 import Reveal from "../lib/Reveal.jsx";
-import { QUESTIONS } from "../lib/config.js";
+import { OFFICIAL_SITE, QUESTIONS } from "../lib/config.js";
 
-const TOPIC_NODES = [
-  { icon: GraduationCap, label: "Admissions", cls: "node-a" },
-  { icon: Building2, label: "Departments", cls: "node-b" },
-  { icon: Zap, label: "Placements", cls: "node-c" },
-  { icon: MessageCircle, label: "Contact", cls: "node-d" },
+/** What actually happens when an enquiry is sent (mirrors pages/Enquiry.jsx + the enquiry API). */
+const ENQUIRY_STEPS = [
+  { title: "Fill in the form", text: "Name, email, phone number, an optional programme, and your question." },
+  { title: "Give consent", text: "Tick the consent box so the admissions team may store your details and reply." },
+  { title: "Send and get a reference", text: "You receive a reference number straight away. The same enquiry sent twice is not duplicated." },
+  { title: "The team reviews it", text: "The SVCE admissions team reads your question and contacts you using the details you gave." },
 ];
 
-function HeroPreview() {
-  return (
-    <div className="hero-visual" role="img" aria-label="Illustrative preview: a student asks about B.Tech admission information and the assistant replies with a link to the relevant official page.">
-      <div className="hero-arcs" aria-hidden="true"><i /><i /><i /></div>
-      <div className="preview" aria-hidden="true">
-        <div className="preview-head">
-          <span className="preview-mark"><Sparkles size={15} /></span>
-          <b>Campus AI</b>
-          <span className="preview-tag">Illustrative preview</span>
-        </div>
-        <div className="preview-body">
-          <div className="pv-user">How do I find B.Tech admission information?</div>
-          <div className="pv-ai">
-            <span className="pv-avatar"><Sparkles size={14} /></span>
-            <div>
-              <p>I’ll search available SVCE information and show the relevant source.</p>
-              <div className="pv-lines"><i /><i /><i /></div>
-              <div className="pv-source">
-                <span><Link2 size={14} /></span>
-                <div><b>Official admission page</b><small>svce.edu.in</small></div>
-                <ArrowUpRight size={15} />
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="preview-composer"><span>Ask anything…</span><i><ArrowRight size={14} /></i></div>
-      </div>
-      {TOPIC_NODES.map(({ icon: Icon, label, cls }) => (
-        <span key={label} className={`node ${cls}`} aria-hidden="true"><Icon size={15} />{label}</span>
-      ))}
-    </div>
-  );
-}
+/** Institutional details that have not been supplied/approved yet. Shown honestly instead of guessed. */
+const PENDING_ADMISSIONS = [
+  { icon: GraduationCap, label: "Programmes and eligibility" },
+  { icon: FileText, label: "Application dates and deadlines" },
+  { icon: BookOpen, label: "Fee structure" },
+  { icon: Phone, label: "Admissions office contact details" },
+];
 
-const CAPABILITIES = [
-  {
-    id: "grounded", wide: true, tone: "teal", icon: ShieldCheck, title: "Find relevant SVCE sources",
-    text: "The assistant searches available, indexed SVCE information before it answers, and shows source links so you can check the details yourself.",
-    extra: (<ul className="mini-list"><li>Answers can use indexed passages</li><li>Source links when available</li><li>Clear when no relevant result is found</li></ul>),
-  },
-  {
-    id: "topics", tone: "champagne", icon: Layers, title: "One place for campus topics",
-    text: "Admissions, departments, placements, fees and official contact details — from a single, focused conversation.",
-  },
-  { id: "files", tone: "sage", icon: Paperclip, title: "Bring your own document", text: "Attach TXT, MD, CSV, JSON, PDF, DOCX or images (up to 10 MB) and ask questions about what’s inside." },
-  { id: "voice", tone: "champagne", icon: Mic, title: "Speak your question", text: "Dictate instead of typing in browsers that support speech recognition, then review the text before sending." },
-  { id: "charts", tone: "teal", icon: BarChart3, title: "See numbers at a glance", text: "When an answer contains a table of figures, turn it into a simple chart with one click." },
+const PENDING_COLLEGE = [
+  { icon: Building2, title: "Departments and programmes", text: "A verified list will appear here once the college approves it." },
+  { icon: Zap, title: "Placements", text: "Placement information will be published only after college approval." },
+  { icon: Phone, title: "Contact and location", text: "Official contact details will be added once approved by the college." },
 ];
 
 const STEPS = [
-  { n: "01", icon: MessageCircle, title: "Ask in plain language", text: "Type, dictate, or pick a suggested question. Attach a document if you want it considered." },
-  { n: "02", icon: Search, title: "We search SVCE information", text: "The assistant retrieves the most relevant passages from the indexed SVCE content." },
-  { n: "03", icon: FileText, title: "Read, then verify", text: "You get a clear answer with source links when available — always confirm key details officially." },
+  { icon: ClipboardList, title: "Send an admissions enquiry", text: "Use the form for admission-related questions. The admissions team replies to you directly." },
+  { icon: Search, title: "Ask the AI assistant", text: "For quick questions, the assistant searches the SVCE information it has indexed and shows source links when available." },
+  { icon: LogIn, title: "Sign in to track", text: "Students with an account can see their own enquiries and their status in a personal dashboard." },
 ];
 
+function Pending({ children = "Pending college approval" }) {
+  return <span className="pending-tag"><Clock size={13} aria-hidden="true" /> {children}</span>;
+}
+
 export default function Landing({ navigate, ask }) {
+  const go = (target) => (e) => { e.preventDefault(); navigate(target); };
+
   return (
     <main id="main" tabIndex={-1}>
       {/* ------------------------------ Hero ------------------------------ */}
       <section className="hero" id="home" aria-labelledby="hero-title">
-        <div className="hero-bg" aria-hidden="true"><i className="glow glow-1" /><i className="glow glow-2" /><i className="dots" /></div>
         <div className="container hero-grid">
           <div className="hero-copy">
-            <span className="eyebrow hero-in" style={{ "--d": "0ms" }}>Your campus. Connected.</span>
-            <h1 id="hero-title" className="hero-in" style={{ "--d": "90ms" }}>
-              College information, <em>made intelligent.</em>
-            </h1>
-            <p className="hero-lede hero-in" style={{ "--d": "190ms" }}>
-              A smarter way to explore Sri Venkateswara College of Engineering, Tirupati. Ask questions, discover official information, and get answers grounded in available college sources.
+            <span className="eyebrow">Sri Venkateswara College of Engineering, Tirupati</span>
+            <h1 id="hero-title">Admissions enquiries and campus information for SVCE Tirupati</h1>
+            <p className="hero-lede">
+              Send your admissions question to the SVCE team, or ask the campus AI assistant for information from available college sources.
             </p>
-            <div className="hero-actions hero-in" style={{ "--d": "290ms" }}>
-              <button type="button" className="btn btn--primary" onClick={() => navigate("assistant")}>
-                Ask the AI assistant <ArrowRight size={18} className="btn-arrow" />
-              </button>
-              <a className="btn btn--secondary" href="#explore" onClick={(e) => { e.preventDefault(); navigate("explore"); }}>
-                Explore capabilities <ArrowDownRight size={18} />
+            <div className="hero-actions">
+              <a className="btn btn--primary btn--lg" href="#enquiry" onClick={go("enquiry")}>
+                Start admissions enquiry <ArrowRight size={18} className="btn-arrow" />
+              </a>
+              <a className="btn btn--secondary btn--lg" href="#assistant" onClick={go("assistant")}>
+                <MessageCircle size={18} /> Ask the AI assistant
               </a>
             </div>
-            <ul className="hero-proof hero-in" style={{ "--d": "390ms" }}>
-              <li><ShieldCheck size={16} /> Source links when available</li>
-              <li><Zap size={16} /> Built for SVCE Tirupati</li>
-              <li><Paperclip size={16} /> Files &amp; voice supported</li>
-            </ul>
+            <p className="hero-login">
+              Already a student? <a className="text-link" href="#login" onClick={go("login")}>Student login</a>
+            </p>
           </div>
-          <div className="hero-in hero-visual-wrap" style={{ "--d": "260ms" }}><HeroPreview /></div>
+
+          <aside className="hero-panel" aria-labelledby="journey-title">
+            <h2 id="journey-title">How an admissions enquiry works</h2>
+            <ol className="journey">
+              {ENQUIRY_STEPS.map(({ title, text }, i) => (
+                <li key={title}>
+                  <span className="journey-n" aria-hidden="true">{i + 1}</span>
+                  <div><b>{title}</b><p>{text}</p></div>
+                </li>
+              ))}
+            </ol>
+            <a className="text-link hero-panel-link" href="#enquiry" onClick={go("enquiry")}>Go to the enquiry form <ArrowRight size={16} /></a>
+          </aside>
         </div>
       </section>
 
-      {/* ------------------------- Suggested questions ------------------------- */}
-      <section className="section explore" id="explore" aria-labelledby="explore-title">
-        <div className="container">
-          <Reveal className="section-head section-head--split">
-            <div>
-              <span className="eyebrow">Start with a question</span>
-              <h2 id="explore-title">What do you need to know today?</h2>
-            </div>
-            <p>Choose a topic or ask your own question. The assistant searches available SVCE information and shows sources when available.</p>
-          </Reveal>
-          <div className="q-grid">
-            {QUESTIONS.map(({ icon: Icon, label, q }, i) => (
-              <Reveal key={label} delay={i * 70} className={`q-slot q-slot-${i + 1}`}>
-                <button type="button" className="card card--interactive q-card" onClick={() => ask(q)}>
-                  <span className="q-top">
-                    <span className={`icon-tile ${i % 3 === 1 ? "icon-tile--sage" : i % 3 === 2 ? "icon-tile--teal" : ""}`}><Icon size={22} /></span>
-                    <span className="q-num" aria-hidden="true">0{i + 1}</span>
-                  </span>
-                  <b>{label}</b>
-                  <span className="q-text">{q}</span>
-                  <span className="q-go">Ask this <ArrowRight size={16} /></span>
-                </button>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ------------------------------ Capabilities ------------------------------ */}
-      <section className="section about" id="about" aria-labelledby="about-title">
+      {/* --------------------------- Admissions --------------------------- */}
+      <section className="section band" id="admissions" aria-labelledby="adm-title">
         <div className="container">
           <Reveal className="section-head">
-            <span className="eyebrow">What it can do</span>
-            <h2 id="about-title">Less searching. <em>More understanding.</em></h2>
-            <p>Explore admissions, departments, placement reports, academic information and official contact details from one focused interface.</p>
+            <span className="eyebrow">Admissions</span>
+            <h2 id="adm-title">What you can do now, and what is still to come</h2>
+            <p>The enquiry form is live. Official admission details are being added only after the college approves them.</p>
           </Reveal>
-          <div className="bento">
-            {CAPABILITIES.map(({ id, wide, tone, icon: Icon, title, text, extra }, i) => (
-              <Reveal key={id} delay={i * 70} className={`bento-slot ${wide ? "bento-wide" : ""}`}>
-                <article className={`card bento-card bento-${tone}`}>
-                  <span className={`icon-tile ${tone === "sage" ? "icon-tile--sage" : tone === "teal" ? "icon-tile--teal" : ""}`}><Icon size={22} /></span>
-                  <h3>{title}</h3>
-                  <p>{text}</p>
-                  {extra}
-                </article>
-              </Reveal>
-            ))}
+          <div className="adm-grid">
+            <Reveal className="card adm-card">
+              <span className="icon-tile icon-tile--teal"><ClipboardList size={22} /></span>
+              <h3>Ask the admissions team</h3>
+              <p>Questions about eligibility, the process or documents can be sent through the enquiry form. No account is needed.</p>
+              <a className="btn btn--primary" href="#enquiry" onClick={go("enquiry")}>Open the enquiry form <ArrowRight size={18} className="btn-arrow" /></a>
+            </Reveal>
+            <Reveal className="card adm-card" delay={80}>
+              <h3>Admission details</h3>
+              <p>These will be published here once supplied and approved by SVCE.</p>
+              <ul className="pending-list">
+                {PENDING_ADMISSIONS.map(({ icon: Icon, label }) => (
+                  <li key={label}><Icon size={18} aria-hidden="true" /><span>{label}</span><Pending /></li>
+                ))}
+              </ul>
+              <p className="small muted">Until then, ask through the enquiry form or check the{" "}
+                <a className="text-link" href={OFFICIAL_SITE} target="_blank" rel="noreferrer">official SVCE website<span className="sr-only"> (opens in a new tab)</span></a>.</p>
+            </Reveal>
           </div>
         </div>
       </section>
 
-      {/* ------------------------------ How it works ------------------------------ */}
-      <section className="section how" aria-labelledby="how-title">
+      {/* ------------------------- College information ------------------------- */}
+      <section className="section" id="explore" aria-labelledby="college-title">
         <div className="container">
           <Reveal className="section-head">
-            <span className="eyebrow">How it works</span>
-            <h2 id="how-title">From question to clarity in three steps</h2>
+            <span className="eyebrow">College information</span>
+            <h2 id="college-title">Sri Venkateswara College of Engineering, Tirupati</h2>
+            <p>Verified college information will be listed here. For anything not listed yet, the official website is the reference.</p>
+          </Reveal>
+          <div className="info-grid">
+            {PENDING_COLLEGE.map(({ icon: Icon, title, text }, i) => (
+              <Reveal key={title} delay={i * 70} className="card info-card">
+                <span className="icon-tile icon-tile--sage"><Icon size={22} /></span>
+                <h3>{title}</h3>
+                <p>{text}</p>
+                <Pending />
+              </Reveal>
+            ))}
+            <Reveal delay={210} className="card info-card info-card--link">
+              <span className="icon-tile"><ExternalLink size={22} /></span>
+              <h3>Official SVCE website</h3>
+              <p>The college’s own website is the authoritative source for current information.</p>
+              <a className="text-link" href={OFFICIAL_SITE} target="_blank" rel="noreferrer">Visit svce.edu.in <ExternalLink size={14} className="inline-icon" aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span></a>
+            </Reveal>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------- Student support ---------------------------- */}
+      <section className="section band" id="support" aria-labelledby="support-title">
+        <div className="container">
+          <Reveal className="section-head">
+            <span className="eyebrow">Student support</span>
+            <h2 id="support-title">Get answers, or sign in to your account</h2>
+          </Reveal>
+          <div className="support-grid">
+            <Reveal className="card support-card">
+              <span className="icon-tile icon-tile--teal"><MessageCircle size={22} /></span>
+              <h3>AI assistant</h3>
+              <p>Ask in plain language. The assistant searches the SVCE information available to it and shows sources when it can. Pick a starting question:</p>
+              <div className="ask-chips">
+                {QUESTIONS.map(({ icon: Icon, label, q }) => (
+                  <button key={label} type="button" className="chip" onClick={() => ask(q)}><Icon size={15} aria-hidden="true" /> {label}</button>
+                ))}
+              </div>
+              <a className="btn btn--secondary" href="#assistant" onClick={go("assistant")}>Open the assistant <ArrowRight size={18} className="btn-arrow" /></a>
+            </Reveal>
+            <Reveal className="card support-card" delay={80}>
+              <span className="icon-tile icon-tile--sage"><LogIn size={22} /></span>
+              <h3>Student login</h3>
+              <p>Sign in to see the enquiries you have sent and their current status. New here? You can create an account.</p>
+              <div className="btn-row btn-row--tight">
+                <a className="btn btn--secondary" href="#login" onClick={go("login")}><LogIn size={18} /> Student login</a>
+                <a className="btn btn--quiet" href="#register" onClick={go("register")}><UserPlus size={18} /> Create account</a>
+              </div>
+            </Reveal>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------- How it works ---------------------------- */}
+      <section className="section" id="about" aria-labelledby="how-title">
+        <div className="container">
+          <Reveal className="section-head">
+            <span className="eyebrow">How the platform works</span>
+            <h2 id="how-title">Three ways to get help</h2>
           </Reveal>
           <ol className="steps">
-            {STEPS.map(({ n, icon: Icon, title, text }, i) => (
-              <Reveal as="li" key={n} delay={i * 90} className="step">
-                <span className="step-num" aria-hidden="true">{n}</span>
+            {STEPS.map(({ icon: Icon, title, text }, i) => (
+              <Reveal as="li" key={title} delay={i * 80} className="step">
                 <span className="icon-tile icon-tile--sage"><Icon size={22} /></span>
                 <h3>{title}</h3>
                 <p>{text}</p>
               </Reveal>
             ))}
           </ol>
-          <Reveal className="note" delay={120}>
+          <Reveal className="note" delay={100}>
             <ShieldCheck size={20} />
-            <p><b>Good to know.</b> Answers are based on the information the assistant can find in its index. AI can be incomplete or out of date — verify admissions, fees and other important details with official SVCE sources.</p>
-          </Reveal>
-        </div>
-      </section>
-
-      {/* ------------------------------ Closing CTA ------------------------------ */}
-      <section className="cta-wrap" aria-labelledby="cta-title">
-        <div className="container">
-          <Reveal className="cta">
-            <div>
-              <span className="eyebrow">Ready when you are</span>
-              <h2 id="cta-title">Your next question starts here.</h2>
-            </div>
-            <button type="button" className="btn btn--primary" onClick={() => navigate("assistant")}>
-              Open Campus AI <ArrowRight size={18} className="btn-arrow" />
-            </button>
+            <p><b>Good to know.</b> The assistant answers only from information it has indexed, and AI can be incomplete or out of date. Confirm admissions, fees and other important details with official SVCE sources.</p>
           </Reveal>
         </div>
       </section>

@@ -19,7 +19,9 @@ export class ApiError extends Error {
 
 export async function api(path, { method = "GET", body } = {}) {
   const headers = { Accept: "application/json", "X-Requested-With": "stif-campus" };
-  const init = { method, headers, credentials: "same-origin" };
+  // Include the HttpOnly API session cookie for a separately hosted frontend.
+  // The backend still accepts only configured CORS origins and CSRF headers.
+  const init = { method, headers, credentials: "include" };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);

@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     conn = db.connect()
     try:
         if args.cmd == "init-db":
-            print(f"Database ready at {db.db_path()}")
+            print(f"Database ready: {db.database_description()}")
         elif args.cmd == "create-admin":
             user = auth_service.create_user(conn, email=args.email, full_name=args.name, password=_password(True), role="admin")
             print(f"Created admin {user.email}")

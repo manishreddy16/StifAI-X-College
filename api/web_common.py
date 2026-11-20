@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 
 from fastapi import Depends, Request, Response
 
@@ -14,12 +15,16 @@ SESSION_COOKIE = "stif_session"
 CSRF_HEADER = "x-requested-with"
 CSRF_VALUE = "stif-campus"
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_SECURITY_LOG = logging.getLogger("api.security")
 
 
 def session_hours() -> float:
     try:
-        return max(0.25, float(os.getenv("STIF_SESSION_HOURS", auth_service.DEFAULT_SESSION_HOURS)))
-    except ValueError:
+        configured = float(os.getenv("STIF_SESSION_HOURS", auth_service.DEFAULT_SESSION_HOURS))
+        if not 0.25 <= configured <= 24 * 30:
+            raise ValueError
+        return configured
+    except (ValueError, TypeError):
         return float(auth_service.DEFAULT_SESSION_HOURS)
 
 
@@ -32,6 +37,7 @@ def require_csrf_header(request: Request) -> None:
     """State-changing requests must carry a custom header. Browsers cannot send it cross-site
     without a CORS preflight, which this API's CORS policy does not allow."""
     if request.method not in _SAFE_METHODS and request.headers.get(CSRF_HEADER) != CSRF_VALUE:
+        _SECURITY_LOG.warning("Request rejected (reason=csrf_header_missing, method=%s).", request.method)
         raise Forbidden("Request blocked (missing security header).", code="csrf")
 
 
@@ -67,5 +73,6 @@ def require_user(user: AuthUser | None = Depends(optional_user)) -> AuthUser:
 
 def require_admin(user: AuthUser = Depends(require_user)) -> AuthUser:
     if user.role != "admin":
+        _SECURITY_LOG.warning("Admin route access denied (reason=role_mismatch).")
         raise Forbidden("You do not have access to this area.")
     return user

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -64,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     with serve_index_file(Path(args.chunks) if args.chunks else None):
         if args.run_answers:
             from api import retrieval
-            if os.getenv("LLM_API_KEY") and os.getenv("LLM_MODEL") and not args.allow_llm_calls:
+            if retrieval.llm_calls_configured() and not args.allow_llm_calls:
                 print("An LLM is configured; --run-answers would make paid calls. "
                       "Re-run with --allow-llm-calls to confirm.", file=sys.stderr)
                 return 3

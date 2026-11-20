@@ -1,4 +1,3 @@
-import sqlite3
 import unittest
 from datetime import timedelta
 
@@ -17,7 +16,8 @@ class PasswordTests(unittest.TestCase):
         self.assertFalse(security.verify_password("wrong-password-1", a))
 
     def test_malformed_hash_never_verifies(self):
-        for bad in ("", "plain", "scrypt$x$y", "md5$1$2$3$4$5", "scrypt$1$1$1$!!$!!"):
+        for bad in ("", "plain", "scrypt$x$y", "md5$1$2$3$4$5", "scrypt$1$1$1$!!$!!",
+                    "scrypt$2147483648$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="):
             self.assertFalse(security.verify_password(GOOD_PASSWORD, bad))
 
     def test_password_policy(self):
@@ -74,7 +74,7 @@ class AccountTests(DbTestCase):
                                      password=GOOD_PASSWORD, role="superuser", now=T0)
 
     def test_database_rejects_unknown_role_even_with_raw_sql(self):
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(db.DatabaseIntegrityError):
             self.conn.execute("INSERT INTO users (email, full_name, password_hash, role, created_at) "
                               "VALUES ('a@b.co', 'A B', 'x', 'root', 'now')")
 
@@ -145,6 +145,11 @@ class SessionTests(DbTestCase):
         self.assertIsNotNone(auth_service.user_for_token(self.conn, token, now=T0 + timedelta(minutes=59)))
         self.assertIsNone(auth_service.user_for_token(self.conn, token, now=T0 + timedelta(minutes=61)))
 
+    def test_session_lifetime_is_bounded(self):
+        for ttl in (0, 24 * 31, float("inf")):
+            with self.assertRaises(ValueError):
+                auth_service.create_session(self.conn, self.user.id, now=T0, ttl_hours=ttl)
+
     def test_garbage_tokens(self):
         for t in (None, "", "abc", "x" * 1000):
             self.assertIsNone(auth_service.user_for_token(self.conn, t, now=T0))
@@ -171,6 +176,15 @@ class MigrationAndLimiterTests(DbTestCase):
         self.assertTrue(lim.allow("other"))
         now[0] = 61
         self.assertTrue(lim.allow("ip"))
+
+    def test_rate_limiter_bounds_unique_keys(self):
+        now = [0.0]
+        lim = SlidingWindowLimiter(1, 60, clock=lambda: now[0], max_keys=2)
+        lim.allow("a")
+        lim.allow("b")
+        self.assertFalse(lim.allow("c"))
+        self.assertLessEqual(len(lim._hits), 2)
+        self.assertFalse(lim.allow("a"))
 
 
 if __name__ == "__main__":

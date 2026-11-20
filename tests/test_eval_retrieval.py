@@ -235,12 +235,56 @@ class CliTests(Base):
 
     def test_run_answers_refuses_paid_calls_without_flag(self):
         ds = write_dataset(self.dir / "d.jsonl", [rec(id="A")])
-        env = {"LLM_API_KEY": "dummy-not-a-real-key", "LLM_MODEL": "dummy"}
+        env = {
+            "OPENROUTER_API_KEY": "dummy-not-a-real-key", "OPENROUTER_MODEL": "dummy",
+            "LLM_API_KEY": "", "LLM_MODEL": "",
+        }
         with mock.patch.dict(os.environ, env), \
              mock.patch("api.retrieval.answer_question", side_effect=AssertionError("LLM path used")) as aq:
             code = cli.main(["--dataset", str(ds), "--run-answers", "--output-dir", str(self.dir)])
         self.assertEqual(code, 3)
         aq.assert_not_called()
+
+    def test_run_answers_with_permission_allows_openrouter_generation(self):
+        ds = write_dataset(self.dir / "d.jsonl", [rec(id="A")])
+        env = {
+            "OPENROUTER_API_KEY": "dummy-not-a-real-key", "OPENROUTER_MODEL": "dummy",
+            "LLM_API_KEY": "", "LLM_MODEL": "",
+        }
+        result = {"answer": "mock answer", "mode": "llm_grounded", "sources": []}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("api.retrieval.answer_question", return_value=result) as aq:
+            code = cli.main([
+                "--dataset", str(ds), "--run-answers", "--allow-llm-calls",
+                "--output-dir", str(self.dir),
+            ])
+        self.assertEqual(code, 0)
+        aq.assert_called_once()
+
+    def test_run_answers_refuses_legacy_config_without_permission(self):
+        ds = write_dataset(self.dir / "d.jsonl", [rec(id="A")])
+        env = {
+            "OPENROUTER_API_KEY": "", "OPENROUTER_MODEL": "",
+            "LLM_API_KEY": "legacy-dummy-key", "LLM_MODEL": "legacy-model",
+        }
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("api.retrieval.answer_question", side_effect=AssertionError("LLM path used")) as aq:
+            code = cli.main(["--dataset", str(ds), "--run-answers", "--output-dir", str(self.dir)])
+        self.assertEqual(code, 3)
+        aq.assert_not_called()
+
+    def test_run_answers_without_provider_keeps_existing_retrieval_behavior(self):
+        ds = write_dataset(self.dir / "d.jsonl", [rec(id="A")])
+        env = {
+            "OPENROUTER_API_KEY": "", "OPENROUTER_MODEL": "",
+            "LLM_API_KEY": "", "LLM_MODEL": "",
+        }
+        result = {"answer": "retrieval fallback", "mode": "retrieval", "sources": []}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("api.retrieval.answer_question", return_value=result) as aq:
+            code = cli.main(["--dataset", str(ds), "--run-answers", "--output-dir", str(self.dir)])
+        self.assertEqual(code, 0)
+        aq.assert_called_once()
 
     def test_cli_end_to_end_on_temp_index(self):
         idx = write_chunks(self.dir / "i" / "chunks.jsonl", [

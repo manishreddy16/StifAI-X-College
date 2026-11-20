@@ -10,7 +10,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -23,9 +22,31 @@ load_dotenv()
 
 LOGGER = logging.getLogger(__name__)
 LLM_REQUEST_TIMEOUT_SECONDS = 120
+OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3.5-lightning:free"
+LLM_MAX_OUTPUT_TOKENS = 1600
 MAX_USER_DOCUMENT_CHARS = 30_000
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _openrouter_configuration() -> tuple[str, str]:
+    """Return the active provider credentials and model using generation defaults."""
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    model = os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL).strip()
+    return api_key, model
+
+
+def llm_calls_configured() -> bool:
+    """Whether the evaluation CLI must require explicit permission before generation.
+
+    OpenRouter is the active provider. The complete legacy pair remains recognized
+    here as a conservative guard for environments transitioning old settings.
+    """
+    api_key, model = _openrouter_configuration()
+    openrouter_configured = bool(api_key and model)
+    legacy_configured = bool(os.getenv("LLM_API_KEY", "").strip() and os.getenv("LLM_MODEL", "").strip())
+    return openrouter_configured or legacy_configured
 
 FAST_CHUNKS_PATH = ROOT / "data" / "index_fast" / "chunks.jsonl"
 OLD_CHUNKS_PATH = ROOT / "data" / "index" / "chunks.jsonl"
@@ -1045,13 +1066,10 @@ def _generate_with_llm(
     user_document_text: str | None = None,
     user_document_name: str | None = None,
 ) -> str | None:
-    api_key = os.getenv("LLM_API_KEY", "").strip()
-    model = os.getenv("LLM_MODEL", "").strip()
-    base_url = os.getenv(
-        "LLM_BASE_URL",
-        "https://api.openai.com/v1",
-    ).rstrip("/")
-    provider = urlparse(base_url).hostname or "configured endpoint"
+    # OpenRouter is the only cloud provider. Keep credentials server-side and
+    # use a fixed official endpoint; only the model ID is configurable.
+    api_key, model = _openrouter_configuration()
+    provider = "openrouter"
 
     # Clean navigation-heavy admission-page chunks before building
     # the context sent to the language model.
@@ -1116,16 +1134,21 @@ Return only the answer to the student's question.
 
     try:
         response = requests.post(
-            f"{base_url}/chat/completions",
+            OPENROUTER_CHAT_COMPLETIONS_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "X-OpenRouter-Title": "STIF Campus AI - SVCE Tirupati",
             },
             json={
-    "model": model,
-    "temperature": 0.1,
-    "max_tokens": 800,
-    "messages": [
+                "model": model,
+                "temperature": 0.1,
+                "max_tokens": LLM_MAX_OUTPUT_TOKENS,
+                "stream": False,
+                # Reasoning tokens consume the same max_tokens budget. This
+                # grounded assistant needs a concise answer, not a reasoning trace.
+                "reasoning": {"enabled": False},
+                "messages": [
                     {"role": "system", "content": system},
                     {
                         "role": "user",
@@ -1140,25 +1163,78 @@ Return only the answer to the student's question.
         )
 
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except (ValueError, requests.exceptions.RequestException):
+            LOGGER.warning(
+                "LLM response unusable (provider=%s, status=%s, reason=invalid_json, response_shape=%s).",
+                provider, response.status_code, {"body_type": "non_json", "content_type": _safe_content_type(response)},
+            )
+            return None
+        status = response.status_code
+        if not isinstance(data, dict):
+            LOGGER.warning(
+                "LLM response unusable (provider=%s, status=%s, reason=invalid_json_shape, response_shape=%s).",
+                provider, status, _completion_response_shape(data),
+            )
+            return None
 
-        answer = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+        # Some gateways return an error object even with a successful HTTP status.
+        if isinstance(data.get("error"), dict):
+            _log_provider_error(provider, status, data["error"])
+            return None
 
-        if isinstance(answer, str) and answer.strip():
-            answer = answer.strip()
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            LOGGER.warning(
+                "LLM response unusable (provider=%s, status=%s, reason=missing_choices, finish_reason=unavailable, response_shape=%s).",
+                provider, status, _completion_response_shape(data),
+            )
+            return None
 
+        choice = choices[0]
+        finish_reason = _safe_log_value(choice.get("finish_reason"), max_length=40) or "unavailable"
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            LOGGER.warning(
+                "LLM response unusable (provider=%s, status=%s, reason=missing_message, finish_reason=%s, response_shape=%s).",
+                provider, status, finish_reason, _completion_response_shape(data),
+            )
+            return None
+
+        if message.get("refusal") or finish_reason in {"content_filter", "refusal"}:
+            LOGGER.warning(
+                "LLM response declined (provider=%s, status=%s, reason=refusal, finish_reason=%s, response_shape=%s).",
+                provider, status, finish_reason, _completion_response_shape(data),
+            )
+            return None
+
+        # Do not show partial answers when the provider says it stopped at the
+        # output limit, or a non-text tool call when this app expects plain text.
+        if finish_reason in {"length", "tool_calls", "function_call"}:
+            LOGGER.warning(
+                "LLM response incomplete (provider=%s, status=%s, finish_reason=%s, response_shape=%s).",
+                provider, status, finish_reason, _completion_response_shape(data),
+            )
+            return None
+
+        answer = _completion_text(message.get("content"))
+        if answer:
+            LOGGER.debug(
+                "LLM response accepted (provider=%s, status=%s, finish_reason=%s, response_shape=%s).",
+                provider, status, finish_reason, _completion_response_shape(data),
+            )
             return _normalize_academic_years(answer)
 
-        LOGGER.warning("LLM returned an empty answer (provider=%s).", provider)
+        LOGGER.warning(
+            "LLM response empty (provider=%s, status=%s, finish_reason=%s, response_shape=%s).",
+            provider, status, finish_reason, _completion_response_shape(data),
+        )
         return None
 
     except requests.exceptions.Timeout as exc:
         LOGGER.warning(
-            "LLM request timed out (provider=%s, timeout_seconds=%s, error_type=%s).",
+            "LLM request timed out (provider=%s, status=unavailable, timeout_seconds=%s, error_type=%s).",
             provider,
             LLM_REQUEST_TIMEOUT_SECONDS,
             type(exc).__name__,
@@ -1171,16 +1247,28 @@ Return only the answer to the student's question.
             if exc.response is not None
             else "unknown"
         )
-        LOGGER.warning(
-            "LLM HTTP error (provider=%s, status=%s).",
-            provider,
-            status,
-        )
+        if status == 429:
+            category = "rate_limited"
+        elif status in (401, 403):
+            category = "authentication_failed"
+        elif status == 404:
+            category = "model_unavailable"
+        else:
+            category = "provider_error"
+        provider_error = {}
+        if exc.response is not None:
+            try:
+                payload = exc.response.json()
+                if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+                    provider_error = payload["error"]
+            except (ValueError, requests.exceptions.RequestException):
+                pass
+        _log_provider_error(provider, status, provider_error, fallback_category=category)
         return None
 
     except requests.exceptions.RequestException as exc:
         LOGGER.warning(
-            "LLM connection error (provider=%s, error_type=%s).",
+            "LLM connection error (provider=%s, status=unavailable, error_type=%s).",
             provider,
             type(exc).__name__,
         )
@@ -1188,11 +1276,108 @@ Return only the answer to the student's question.
 
     except Exception as exc:
         LOGGER.error(
-            "Unexpected LLM integration error (provider=%s, error_type=%s).",
+            "Unexpected LLM integration error (provider=%s, status=unavailable, error_type=%s).",
             provider,
             type(exc).__name__,
         )
         return None
+
+
+def _safe_log_value(value: Any, *, max_length: int = 80) -> str | None:
+    """Keep provider metadata log-safe: short identifiers only, never free text."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)[:max_length]
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1," + str(min(max_length, 40)) + r"}", value):
+        return value
+    return None
+
+
+def _safe_content_type(response: requests.Response) -> str:
+    value = response.headers.get("Content-Type", "") if response is not None else ""
+    media_type = value.split(";", 1)[0].strip().lower()
+    return media_type if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", media_type) else "unknown"
+
+
+def _completion_text(content: Any) -> str:
+    """Extract plain text from OpenAI-compatible string or text-block content."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            item.get("text", "") for item in content
+            if isinstance(item, dict) and item.get("type") in {"text", "output_text"}
+            and isinstance(item.get("text"), str)
+        ]
+        return "".join(parts).strip()
+    return ""
+
+
+def _completion_response_shape(data: Any) -> dict[str, Any]:
+    """Describe response structure without logging message contents."""
+    shape: dict[str, Any] = {"top_type": type(data).__name__}
+    if not isinstance(data, dict):
+        return shape
+    shape["top_keys"] = sorted(str(k) for k in data.keys())[:16]
+    choices = data.get("choices")
+    shape["choices_type"] = type(choices).__name__
+    shape["choices_count"] = len(choices) if isinstance(choices, list) else None
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        first = choices[0]
+        shape["choice_keys"] = sorted(str(k) for k in first.keys())[:12]
+        shape["finish_reason"] = _safe_log_value(first.get("finish_reason"))
+        message = first.get("message")
+        shape["message_type"] = type(message).__name__
+        if isinstance(message, dict):
+            shape["message_keys"] = sorted(str(k) for k in message.keys())[:12]
+            shape["content_type"] = type(message.get("content")).__name__
+            content = message.get("content")
+            if isinstance(content, str):
+                shape["content_chars"] = len(content)
+            elif isinstance(content, list):
+                shape["content_blocks"] = len(content)
+            shape["refusal_present"] = bool(message.get("refusal"))
+    if isinstance(data.get("error"), dict):
+        shape["error_keys"] = sorted(str(k) for k in data["error"].keys())[:12]
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        shape["prompt_tokens"] = _safe_log_value(usage.get("prompt_tokens"))
+        shape["completion_tokens"] = _safe_log_value(usage.get("completion_tokens"))
+        details = usage.get("completion_tokens_details")
+        if isinstance(details, dict):
+            shape["reasoning_tokens"] = _safe_log_value(details.get("reasoning_tokens"))
+    return shape
+
+
+def _provider_message_class(message: Any) -> str:
+    """Map provider prose to a small safe diagnostic vocabulary; never log prose."""
+    if not isinstance(message, str):
+        return "unavailable"
+    lowered = message.lower()
+    if any(term in lowered for term in ("no endpoints", "model not found", "unknown model", "model unavailable")):
+        return "model_unavailable"
+    if any(term in lowered for term in ("invalid api key", "unauthorized", "authentication", "api key")):
+        return "authentication_failed"
+    if any(term in lowered for term in ("rate limit", "too many requests")):
+        return "rate_limited"
+    if any(term in lowered for term in ("credit", "billing", "payment")):
+        return "billing_or_credits"
+    return "provider_message_present"
+
+
+def _log_provider_error(provider: str, status: Any, error: dict[str, Any], *, fallback_category: str = "provider_error") -> None:
+    code = error.get("code", error.get("type")) if isinstance(error, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    safe_code = _safe_log_value(code)
+    message_class = _provider_message_class(message)
+    category = fallback_category
+    if message_class != "provider_message_present" and message_class != "unavailable":
+        category = message_class
+    LOGGER.warning(
+        "LLM request failed (provider=%s, status=%s, category=%s, provider_error_code=%s, provider_message_class=%s).",
+        provider, status, category, safe_code or "unavailable", message_class,
+    )
 
 
 def _build_sources(

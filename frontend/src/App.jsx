@@ -15,7 +15,7 @@ import { prefersReducedMotion } from "./lib/config.js";
 
 const KNOWN = new Set(["assistant", "login", "register", "enquiry", "dashboard", "admin"]);
 const TITLES = {
-  home: "STIF × SVCE | Campus AI", assistant: "Campus AI assistant | STIF × SVCE", login: "Student sign-in | STIF × SVCE",
+  home: "SVCE Tirupati | Admissions enquiry & Campus AI", assistant: "Campus AI assistant | STIF × SVCE", login: "Student sign-in | STIF × SVCE",
   register: "Create account | STIF × SVCE", enquiry: "Admissions enquiry | STIF × SVCE", dashboard: "My dashboard | STIF × SVCE",
   "admin-login": "Staff sign-in | STIF × SVCE", admin: "Administration | STIF × SVCE",
 };

@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: stif-campus-ai-api
+    runtime: python
+    region: singapore
+    plan: starter
+    buildCommand: pip install -r requirements-local.txt -r requirements-additions.txt
+    preDeployCommand: python -m api.manage init-db
+    startCommand: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
+    envVars:
+      - key: STIF_ENV
+        value: production
+      - key: STIF_COOKIE_SECURE
+        value: "1"
+      - key: STIF_STORAGE_BACKEND
+        value: r2
+      - key: STIF_STORAGE_REGION
+        value: auto
+      - key: STIF_STORAGE_PREFIX
+        value: stif-campus-ai
+      - key: STIF_CORS_ORIGINS
+        value: https://your-approved-app-domain.example
+      - key: STIF_ALLOWED_HOSTS
+        value: stif-campus-ai-api.onrender.com,your-api-domain.example
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-3.5-lightning:free
+      - key: STIF_DATABASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: STIF_STORAGE_BUCKET
+        sync: false
+      - key: STIF_STORAGE_ENDPOINT
+        sync: false
+      - key: STIF_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: STIF_STORAGE_SECRET_ACCESS_KEY
+        sync: false

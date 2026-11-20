@@ -20,9 +20,8 @@ from diagnostics import checks
 ROOT = Path(__file__).resolve().parents[1]
 _SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.I)
 FAKE_LLM_ENV = {
-    "LLM_API_KEY": "diagnostic-fake-key",
-    "LLM_MODEL": "diagnostic-fake-model",
-    "LLM_BASE_URL": "https://llm.diagnostic.invalid/v1",
+    "OPENROUTER_API_KEY": "diagnostic-fake-key",
+    "OPENROUTER_MODEL": "diagnostic-fake-model",
 }
 
 

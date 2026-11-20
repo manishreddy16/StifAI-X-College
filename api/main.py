@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from pathlib import Path
 from io import BytesIO
 from typing import Any
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from api import db
+from api.artifact_storage import (
+    StorageError,
+    get_storage,
+    storage_backend,
+)
 from api.retrieval import (
+    DEFAULT_OPENROUTER_MODEL,
     MAX_USER_DOCUMENT_CHARS,
     answer_question,
     describe_serving,
@@ -30,14 +40,61 @@ FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 app = FastAPI(title="STIF.ai SVCE College Assistant", version="0.1.0")
 
+
+def configured_cors_origins() -> list[str]:
+    """Exact browser origins allowed to use credentialed API requests."""
+    raw = os.getenv("STIF_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    origins = [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            valid_local = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
+            valid_https = parsed.scheme == "https" and bool(parsed.hostname)
+            valid_shape = bool(parsed.netloc) and not parsed.username and not parsed.password and not parsed.path and not parsed.query and not parsed.fragment
+            _ = parsed.port
+        except ValueError:
+            valid_local = valid_https = valid_shape = False
+        if not (valid_shape and (valid_local or valid_https)):
+            raise RuntimeError("STIF_CORS_ORIGINS must contain explicit HTTPS origins or local development origins.")
+    return origins
+
+
+def configured_allowed_hosts() -> list[str]:
+    """Return explicit Host header names; proxy host wildcards are not accepted."""
+    raw = os.getenv("STIF_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
+    hosts = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    pattern = re.compile(r"(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)")
+    if not hosts or any(not pattern.fullmatch(host) or ".." in host for host in hosts):
+        raise RuntimeError("STIF_ALLOWED_HOSTS must contain explicit hostnames; wildcard hosts are not allowed.")
+    return hosts
+
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=configured_allowed_hosts())
+
+
+def enforce_production_database() -> None:
+    """Prevent a deployment explicitly marked production from silently using SQLite."""
+    if os.getenv("STIF_ENV", "").strip().lower() in {"prod", "production"} and db.database_backend() != "postgres":
+        raise RuntimeError("STIF_ENV=production requires PostgreSQL through STIF_DATABASE_URL.")
+
+
+@app.on_event("startup")
+def _check_production_database() -> None:
+    enforce_production_database()
+    if storage_backend() == "r2":
+        try:
+            result = get_storage().materialize_active()
+        except StorageError:
+            raise RuntimeError("Persistent knowledge-artifact storage is unavailable.") from None
+        if not result.get("generation"):
+            raise RuntimeError("Persistent knowledge-artifact storage has no active generation.")
+        reload_index()
+
 # Permit the local Vite frontend to call this API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=False,
+    allow_origins=configured_cors_origins(),
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
@@ -135,9 +192,25 @@ def health():
         "chunks_loaded": index["chunks_loaded"],
         "index_ready": index["index_ready"],
         "llm_configured": bool(
-            os.getenv("LLM_API_KEY") and os.getenv("LLM_MODEL")
+            os.getenv("OPENROUTER_API_KEY", "").strip()
+            and os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL).strip()
         ),
     }
+
+
+@app.get("/ready")
+def readiness(response: Response):
+    """Readiness probe: liveness remains separate; database details are never returned."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        with db.session() as conn:
+            conn.execute("SELECT 1").fetchone()
+        if storage_backend() == "r2" and not get_storage().check_ready():
+            raise RuntimeError("Artifact storage unavailable")
+    except Exception:
+        response.status_code = 503
+        return {"status": "not_ready"}
+    return {"status": "ready"}
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
@@ -191,6 +264,11 @@ def index_reload():
     If the new files are missing, empty or invalid, the last known-good index
     keeps serving and ``last_error`` explains why.
     """
+    try:
+        if storage_backend() == "r2":
+            get_storage().materialize_active()
+    except StorageError:
+        raise HTTPException(status_code=503, detail="Knowledge index storage is temporarily unavailable.") from None
     return reload_index()
 
 
@@ -211,6 +289,30 @@ def _run_ingest_task(start_url: str, max_pages: int):
                 report=report,
             )
             return
+        if storage_backend() == "r2":
+            try:
+                get_storage().publish_local()
+            except Exception as exc:
+                # Driver/transaction failures also need to restore the local
+                # index; never surface third-party or database error details.
+                import logging
+                logging.getLogger("api.artifact_storage").error(
+                    "Artifact generation publication failed (error_type=%s).", type(exc).__name__
+                )
+                # Do not report the new index as active when its durable generation
+                # was not switched. Restore the prior known-good index locally.
+                from ingestion.index_publisher import IndexPublishError, rollback_index
+                try:
+                    rollback_index(ROOT / "data" / "index", report.get("backup"))
+                    reload_index()
+                except (IndexPublishError, OSError):
+                    pass
+                _ingest_state.update(
+                    status="failed",
+                    message="Could not confirm durable knowledge-generation publication; synchronize the active generation before retrying.",
+                    report=report,
+                )
+                return
         reload_index()
         published_path = ROOT / "data" / "index" / "chunks.jsonl"
         serving = describe_serving(published_path, report.get("sha256"))

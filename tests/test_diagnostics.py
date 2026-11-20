@@ -271,13 +271,13 @@ class SafetyTests(DataDirCase):
                 recorded.append((url, headers))
                 return super().__call__(url, headers=headers, json=json, timeout=timeout)
 
-        env = {"LLM_API_KEY": "REAL-SECRET-SENTINEL", "LLM_MODEL": "real-model", "LLM_BASE_URL": "https://real.example/v1"}
+        env = {"OPENROUTER_API_KEY": "REAL-SECRET-SENTINEL", "OPENROUTER_MODEL": "real-model"}
         with mock.patch.dict(os.environ, env), mock.patch.object(cli, "FakeLLM", Spy):
             code, out, err = run(["--data-dir", str(self.data), "--json"])
-            self.assertEqual(os.environ["LLM_API_KEY"], "REAL-SECRET-SENTINEL")  # restored
+            self.assertEqual(os.environ["OPENROUTER_API_KEY"], "REAL-SECRET-SENTINEL")  # restored
         self.assertTrue(recorded)
         for url, headers in recorded:
-            self.assertTrue(url.startswith("https://llm.diagnostic.invalid/"))
+            self.assertTrue(url.startswith("https://openrouter.ai/api/v1/"))
             self.assertNotIn("REAL-SECRET-SENTINEL", json.dumps(headers))
         self.assertNotIn("REAL-SECRET-SENTINEL", out + err)
         self.assertNotIn("real.example", out + err)
@@ -290,24 +290,24 @@ class SafetyTests(DataDirCase):
 
         def fake_set_env(self, *a, **k):
             calls.append(1)
-            os.environ["LLM_API_KEY"] = "DOTENV-SENTINEL"
+            os.environ["OPENROUTER_API_KEY"] = "DOTENV-SENTINEL"
             os.environ["DIAG_HARMLESS_SETTING"] = "ok"
             return True
 
         try:
             with mock.patch.object(dotenv.main.DotEnv, "set_as_environment_variables", fake_set_env), \
                     mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("LLM_API_KEY", None)
+                os.environ.pop("OPENROUTER_API_KEY", None)
                 sys.modules.pop("api.retrieval")
                 cli.import_retrieval(False)
                 self.assertEqual(calls, [])
-                self.assertNotIn("LLM_API_KEY", os.environ)
+                self.assertNotIn("OPENROUTER_API_KEY", os.environ)
 
                 sys.modules.pop("api.retrieval")
                 _, state = cli.import_retrieval(True)
                 self.assertEqual(calls, [1])
                 self.assertTrue(state["dotenv_called"])
-                self.assertNotIn("LLM_API_KEY", os.environ)         # secret-named variable removed
+                self.assertNotIn("OPENROUTER_API_KEY", os.environ)  # secret-named variable removed
                 self.assertEqual(os.environ.get("DIAG_HARMLESS_SETTING"), "ok")
         finally:
             os.environ.pop("DIAG_HARMLESS_SETTING", None)

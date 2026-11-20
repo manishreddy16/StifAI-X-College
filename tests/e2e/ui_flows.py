@@ -93,14 +93,14 @@ with sync_playwright() as p:
     cN.close()
 
     # 4. student sees only their own; second student sees none
-    A.goto(B + "/#dashboard"); A.wait_for_selector(".enq-item")
-    check("student A sees exactly their own enquiry", A.locator(".enq-item").count() == 1 and ref in A.locator(".enq-item").inner_text())
+    A.goto(B + "/#dashboard"); A.wait_for_selector(".sd-card")
+    check("student A sees exactly their own enquiry", A.locator(".sd-card").count() == 1 and ref in A.locator(".sd-card").inner_text())
     A.screenshot(path=SHOTS + "/dashboard_enquiries.png", full_page=True)
     cB, Bp, _ = new(); Bp.goto(B + "/#register")
     Bp.get_by_label("Full name").fill("Second Student"); Bp.get_by_label(EM).fill("second.student@example.com")
     Bp.get_by_label(PW).fill("Second-Learner-55"); Bp.get_by_label("Confirm password").fill("Second-Learner-55")
     Bp.get_by_role("button", name="Create account").click(); Bp.wait_for_url("**#dashboard"); Bp.wait_for_selector("text=No enquiries yet")
-    check("student B sees none of student A's enquiries", Bp.locator(".enq-item").count() == 0 and "Anil" not in Bp.inner_text("main"))
+    check("student B sees none of student A's enquiries", Bp.locator(".sd-card").count() == 0 and "Anil" not in Bp.inner_text("main"))
 
     # 5. student cannot access admin (UI + API)
     Bp.goto(B + "/#admin"); Bp.wait_for_selector("text=do not have access")
@@ -133,23 +133,23 @@ with sync_playwright() as p:
     check("admin list shows both enquiries", M.locator("tbody tr").count() == 2)
     M.get_by_label("Search enquiries").fill("priya"); M.wait_for_function("document.querySelectorAll('tbody tr').length===1")
     check("admin search filters", "Priya" in M.locator("tbody").inner_text())
-    M.get_by_label("Search enquiries").fill(""); M.get_by_label("Filter by status").select_option("responded"); M.wait_for_selector("text=No enquiries found")
-    check("status filter + empty state", True); M.get_by_label("Filter by status").select_option("")
+    M.get_by_label("Search enquiries").fill(""); M.get_by_role("button", name=re.compile("^Responded")).click(); M.wait_for_selector("text=No enquiries match")
+    check("status filter + empty state", True); M.get_by_role("button", name=re.compile("^All")).click()
     M.wait_for_selector("tbody tr"); M.screenshot(path=SHOTS + "/admin_list.png")
-    M.get_by_role("link", name=ref).click(); M.wait_for_selector("text=Student details")
+    M.locator("tbody tr").filter(has_text=ref).get_by_role("link").click(); M.wait_for_selector("text=Student details")
     check("admin detail shows full message + phone", "admission counselling" in M.inner_text("main") and "9876543210" in M.inner_text("main"))
-    M.get_by_label("Status").select_option("responded"); M.get_by_label("Internal notes").fill("Called back; sent document checklist.")
+    M.get_by_label("Status", exact=True).select_option("responded"); M.get_by_label("Internal notes", exact=True).fill("Called back; sent document checklist.")
     M.get_by_role("button", name="Save changes").click(); M.wait_for_selector("text=Enquiry updated")
     M.screenshot(path=SHOTS + "/admin_detail.png", full_page=True)
     check("admin status update saved", M.locator(".badge").first.inner_text() == "Responded")
 
     # student sees status change but NOT admin notes
-    A.reload(); A.wait_for_selector(".enq-item")
-    txt = A.inner_text(".enq-item"); check("student sees updated status", "Responded" in txt)
+    A.reload(); A.wait_for_selector(".sd-card")
+    txt = A.inner_text(".sd-card"); check("student sees updated status", "Responded" in txt)
     st, d = api(cA, "GET", "/api/v1/enquiries/mine"); check("student API never returns admin notes / others' contact", "admin_notes" not in json.dumps(d) and len(d["items"]) == 1)
 
     # programmes
-    M.get_by_role("link", name="Programmes").click(); M.wait_for_selector("text=No programmes yet")
+    M.get_by_role("link", name="Programmes").click(); M.wait_for_selector("text=No programmes added yet")
     M.get_by_label("New programme name").fill("Test Programme (QA only)"); M.get_by_role("button", name="Add").click(); M.wait_for_selector(".prog-list")
     check("admin can add programme", "Test Programme" in M.inner_text(".prog-list"))
     A.goto(B + "/#enquiry"); A.wait_for_selector("select.control"); check("enquiry form now lists the programme", "Test Programme (QA only)" in A.locator("select.control").inner_text())
@@ -177,7 +177,8 @@ with sync_playwright() as p:
     check("login via student page sends admin to #admin", True)
     # landing still OK
     A.goto(B + "/#home"); A.wait_for_selector("footer"); A.screenshot(path=SHOTS + "/home.png")
-    check("landing page renders with new header links", A.get_by_role("link", name="Enquire").first.is_visible())
+    primary = A.get_by_role("navigation", name="Primary")
+    check("signed-in landing page renders student header links", primary.get_by_role("link", name="Admissions enquiry").is_visible() and primary.get_by_role("link", name="Dashboard").is_visible())
     allerr = [e for e in errsA + errsM if "favicon" not in e and "fonts.g" not in e and "401" not in e and "net::ERR" not in e]
     check("no unexpected JS console errors", not allerr, "; ".join(allerr)[:300])
     br.close()

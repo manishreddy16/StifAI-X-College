@@ -36,15 +36,18 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, n, r, p, salt_b64, digest_b64 = stored.split("$")
-        if scheme != "scrypt":
+        # Hashes come from the database. Treat them as untrusted input so a
+        # damaged or altered row cannot request arbitrarily expensive scrypt work.
+        if (scheme != "scrypt" or int(n) != SCRYPT_N or int(r) != SCRYPT_R or int(p) != SCRYPT_P):
             return False
-        n, r, p = int(n), int(r), int(p)
-        salt = base64.b64decode(salt_b64)
-        expected = base64.b64decode(digest_b64)
-        actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p,
-                                dklen=len(expected), maxmem=128 * n * r * 2)
+        salt = base64.b64decode(salt_b64, validate=True)
+        expected = base64.b64decode(digest_b64, validate=True)
+        if len(salt) != 16 or len(expected) != DKLEN:
+            return False
+        actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
+                                dklen=DKLEN, maxmem=_MAXMEM)
         return hmac.compare_digest(actual, expected)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return False
 
 

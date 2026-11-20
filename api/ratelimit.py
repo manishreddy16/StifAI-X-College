@@ -20,8 +20,12 @@ class SlidingWindowLimiter:
         """Record an attempt; return False if the key is over its limit."""
         now = self._clock()
         with self._lock:
-            if len(self._hits) > self._max_keys:
+            if len(self._hits) >= self._max_keys and key not in self._hits:
                 self._hits = {k: v for k, v in self._hits.items() if v and now - v[-1] < self.window}
+                if len(self._hits) >= self._max_keys:
+                    # Keep memory bounded without dropping an active client's
+                    # counter, which would let key churn bypass its limit.
+                    return False
             q = self._hits.setdefault(key, deque())
             while q and now - q[0] >= self.window:
                 q.popleft()

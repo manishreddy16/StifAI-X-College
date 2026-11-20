@@ -1,7 +1,7 @@
 import unittest
 from datetime import timedelta
 
-from api import auth_service, enquiry_service as es
+from api import auth_service, db, enquiry_service as es
 from api.errors import NotFound, RateLimited, ValidationFailed
 from tests._campus_support import GOOD_PASSWORD, T0, DbTestCase, valid_enquiry
 
@@ -52,8 +52,7 @@ class SubmitTests(DbTestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM enquiries").fetchone()[0], 0)
 
     def test_database_itself_refuses_enquiry_without_consent(self):
-        import sqlite3
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(db.DatabaseIntegrityError):
             self.conn.execute("INSERT INTO enquiries (full_name,email,phone,programme_label,message,consent,consent_version,"
                               "consent_at,dedupe_hash,created_at,updated_at) VALUES ('A B','a@b.co','9876543210','x','m',0,'v','t','h','t','t')")
 

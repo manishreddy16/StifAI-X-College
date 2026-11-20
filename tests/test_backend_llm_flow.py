@@ -23,7 +23,7 @@ from tests.fixtures.serving import serving, tmpdir, write_jsonl
 
 from api import retrieval
 
-FAKE_ENV = {"LLM_API_KEY": "test-key-not-real", "LLM_MODEL": "test-model", "LLM_BASE_URL": "https://llm.invalid/v1"}
+FAKE_ENV = {"OPENROUTER_API_KEY": "test-key-not-real", "OPENROUTER_MODEL": "test-model"}
 
 LIB_CHUNKS = [
     {"chunk_id": "lib-0", "doc_id": "lib", "title": "Library", "url": "https://example.test/library",
@@ -51,7 +51,9 @@ class FakeLLM:
             raise self.exc
         resp = requests.Response()
         resp.status_code = self.status
-        payload = self.body if self.body is not None else {"choices": [{"message": {"content": self.content}}]}
+        payload = self.body if self.body is not None else {
+            "choices": [{"message": {"content": self.content}, "finish_reason": "stop"}]
+        }
         resp._content = __import__("json").dumps(payload).encode()
         return resp
 
@@ -107,9 +109,13 @@ class GroundedAnswerTests(FlowCase):
     def test_request_shape(self):
         retrieval.answer_question("What is the library borrowing period?")
         call = self.fake.calls[0]
-        self.assertEqual(call["url"], "https://llm.invalid/v1/chat/completions")
+        self.assertEqual(call["url"], "https://openrouter.ai/api/v1/chat/completions")
         self.assertEqual(call["headers"]["Authorization"], "Bearer test-key-not-real")
+        self.assertEqual(call["headers"]["X-OpenRouter-Title"], "STIF Campus AI - SVCE Tirupati")
         self.assertEqual(call["json"]["model"], "test-model")
+        self.assertFalse(call["json"]["stream"])
+        self.assertEqual(call["json"]["max_tokens"], retrieval.LLM_MAX_OUTPUT_TOKENS)
+        self.assertEqual(call["json"]["reasoning"], {"enabled": False})
         self.assertEqual(call["json"]["messages"][0]["role"], "system")
         self.assertIn("only the supplied evidence", call["json"]["messages"][0]["content"])
         self.assertEqual(call["json"]["messages"][1]["role"], "user")
@@ -244,7 +250,22 @@ class LLMFailureTests(FlowCase):
 
     def test_http_error_status(self):
         self.fake.status = 429
-        self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        self.assertIn("category=rate_limited", "\n".join(logs.output))
+
+    def test_invalid_api_key_is_handled_without_logging_credentials(self):
+        self.fake.status = 401
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        self.assertIn("authentication_failed", "\n".join(logs.output))
+        self.assertNotIn("test-key-not-real", "\n".join(logs.output))
+
+    def test_unavailable_model_is_handled_gracefully(self):
+        self.fake.status = 404
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        self.assertIn("model_unavailable", "\n".join(logs.output))
 
     def test_unexpected_exception(self):
         self.fake.exc = ValueError("weird")
@@ -258,6 +279,48 @@ class LLMFailureTests(FlowCase):
         self.fake.body = {"unexpected": True}
         self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
 
+    def test_empty_content_logs_safe_response_metadata(self):
+        self.fake.body = {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        logged = "\n".join(logs.output)
+        self.assertIn("status=200", logged)
+        self.assertIn("finish_reason=stop", logged)
+        self.assertIn("response_shape=", logged)
+        self.assertNotIn("MARKER-LIB-TEXT", logged)
+        self.assertNotIn("What is the library borrowing period", logged)
+
+    def test_missing_choices_is_reported_explicitly(self):
+        self.fake.body = {"id": "completion-id", "model": "test-model"}
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        self.assertIn("reason=missing_choices", "\n".join(logs.output))
+
+    def test_text_blocks_are_supported(self):
+        self.fake.body = {"choices": [{"message": {"content": [{"type": "text", "text": "Fourteen days."}]},
+                                       "finish_reason": "stop"}]}
+        out = retrieval.answer_question("What is the library borrowing period?")
+        self.assertEqual(out["mode"], "llm_grounded")
+        self.assertEqual(out["answer"], "Fourteen days.")
+
+    def test_refusal_and_truncated_output_use_safe_fallback(self):
+        for choice in (
+            {"message": {"content": "", "refusal": "blocked"}, "finish_reason": "stop"},
+            {"message": {"content": "partial answer"}, "finish_reason": "length"},
+        ):
+            self.fake.body = {"choices": [choice]}
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+
+    def test_provider_error_message_is_classified_without_logging_raw_message(self):
+        self.fake.status = 400
+        self.fake.body = {"error": {"code": "model_not_found", "message": "No endpoints found for model secret-student@example.test"}}
+        with self.assertLogs("api.retrieval", level="WARNING") as logs:
+            self._assert_unavailable(retrieval.answer_question("What is the library borrowing period?"))
+        logged = "\n".join(logs.output)
+        self.assertIn("provider_error_code=model_not_found", logged)
+        self.assertIn("provider_message_class=model_unavailable", logged)
+        self.assertNotIn("secret-student@example.test", logged)
+
     def test_error_logs_do_not_contain_the_api_key(self):
         self.fake.exc = requests.exceptions.ConnectionError("boom")
         with self.assertLogs("api.retrieval", level="WARNING") as logs:
@@ -266,13 +329,25 @@ class LLMFailureTests(FlowCase):
 
 
 class LLMNotConfiguredTests(FlowCase):
-    env = {"LLM_API_KEY": "", "LLM_MODEL": ""}
+    env = {"OPENROUTER_API_KEY": "", "OPENROUTER_MODEL": "test-model"}
 
     def test_no_key_means_no_call_and_generation_unavailable(self):
         out = retrieval.answer_question("What is the library borrowing period?")
         self.assertEqual(self.fake.calls, [])
         self.assertEqual(out["mode"], "generation_unavailable")
         self.assertEqual(len(out["sources"]), 1)
+
+    def test_old_generic_key_is_not_used(self):
+        with mock.patch.dict(os.environ, {"LLM_API_KEY": "legacy-key", "LLM_MODEL": "legacy-model"}):
+            out = retrieval.answer_question("What is the library borrowing period?")
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(out["mode"], "generation_unavailable")
+
+    def test_default_model_uses_nemotron_free_chat_model(self):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-not-real"}):
+            os.environ.pop("OPENROUTER_MODEL", None)
+            retrieval.answer_question("What is the library borrowing period?")
+        self.assertEqual(self.fake.calls[0]["json"]["model"], "nvidia/nemotron-3.5-lightning:free")
 
 
 class IndexUnavailableTests(unittest.TestCase):

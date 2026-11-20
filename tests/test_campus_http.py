@@ -28,8 +28,11 @@ class CampusHttpTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self._old = os.environ.get("STIF_DB_PATH")
+        self._old_database_url = os.environ.get("STIF_DATABASE_URL")
         os.environ["STIF_DB_PATH"] = str(Path(self._tmp.name) / "http.db")
+        os.environ["STIF_DATABASE_URL"] = ""
         self.addCleanup(lambda: os.environ.pop("STIF_DB_PATH") if self._old is None else os.environ.__setitem__("STIF_DB_PATH", self._old))
+        self.addCleanup(lambda: os.environ.pop("STIF_DATABASE_URL") if self._old_database_url is None else os.environ.__setitem__("STIF_DATABASE_URL", self._old_database_url))
         db.init_db()
         db._initialised.clear()
         for lim in (routes_auth.login_limiter, routes_auth.register_limiter, routes_enquiries.submit_limiter):
@@ -57,6 +60,13 @@ class CampusHttpTests(unittest.TestCase):
     def test_submit_requires_csrf_header(self):
         r = self.client.post("/api/v1/enquiries", json=valid_enquiry())
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (403, "csrf"))
+
+    def test_invalid_auth_payload_does_not_echo_submitted_password(self):
+        secret = "sensitive-password-value"
+        r = self.client.post("/api/v1/auth/login", headers=H, json={"email": "a" * 500, "password": secret})
+        self.assertEqual(r.status_code, 422)
+        self.assertNotIn(secret, r.text)
+        self.assertEqual(r.headers["cache-control"], "no-store")
 
     def test_submit_success_duplicate_and_validation(self):
         r = self.client.post("/api/v1/enquiries", json=valid_enquiry(), headers=H)
