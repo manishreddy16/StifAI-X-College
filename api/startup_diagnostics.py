@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,6 +38,22 @@ def _details_label(details: dict[str, int]) -> str:
     return "".join(f" {key}={value}" for key, value in sorted(details.items()))
 
 
+def _emit(message: str) -> None:
+    """Emit a startup diagnostic without relying on the application logger."""
+    diagnostic_logger = logging.Logger("api.startup_diagnostics", level=logging.INFO)
+    diagnostic_logger.propagate = False
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(logging.INFO)
+    diagnostic_logger.addHandler(handler)
+    try:
+        diagnostic_logger.info(message)
+        handler.flush()
+    finally:
+        diagnostic_logger.removeHandler(handler)
+        handler.close()
+
+
 @contextmanager
 def startup_phase(
     logger: logging.Logger,
@@ -47,28 +64,22 @@ def startup_phase(
     """Log safe timing and RSS markers around a synchronous startup phase."""
     phase_details = dict(details or {})
     started = time.perf_counter()
-    logger.info(
-        "startup_phase=%s status=BEGIN elapsed_s=0.000 rss_mb=%s%s",
-        phase,
-        _rss_label(),
-        _details_label(phase_details),
+    _emit(
+        f"startup_phase={phase} status=BEGIN elapsed_s=0.000 "
+        f"rss_mb={_rss_label()}{_details_label(phase_details)}"
     )
     try:
         yield phase_details
     except BaseException:
-        logger.info(
-            "startup_phase=%s status=FAILED elapsed_s=%.3f rss_mb=%s%s",
-            phase,
-            time.perf_counter() - started,
-            _rss_label(),
-            _details_label(phase_details),
+        _emit(
+            f"startup_phase={phase} status=FAILED "
+            f"elapsed_s={time.perf_counter() - started:.3f} "
+            f"rss_mb={_rss_label()}{_details_label(phase_details)}"
         )
         raise
     else:
-        logger.info(
-            "startup_phase=%s status=COMPLETE elapsed_s=%.3f rss_mb=%s%s",
-            phase,
-            time.perf_counter() - started,
-            _rss_label(),
-            _details_label(phase_details),
+        _emit(
+            f"startup_phase={phase} status=COMPLETE "
+            f"elapsed_s={time.perf_counter() - started:.3f} "
+            f"rss_mb={_rss_label()}{_details_label(phase_details)}"
         )
