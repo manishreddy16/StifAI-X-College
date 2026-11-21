@@ -191,8 +191,11 @@ def term_frequency_profile(quality_index, *, top: int = 12) -> dict[str, Any]:
     n = quality_index.n_chunks
     cfg = quality_index.cfg
     df: Counter = Counter()
+    terms = [""] * len(quality_index.vocabulary)
+    for term, token_id in quality_index.vocabulary.items():
+        terms[token_id] = term
     for tokens in quality_index.doc_sets:
-        df.update(tokens)
+        df.update(terms[token] for token in tokens)
     threshold = cfg.distinctive_idf_fraction * quality_index.idf_max
     max_df = 0
     for candidate in range(1, n + 1):  # largest df whose idf still reaches the threshold

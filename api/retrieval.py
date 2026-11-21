@@ -950,7 +950,7 @@ def _retrieve_improved(
             if coverage < cfg.min_coverage or not distinctive:
                 continue
         elif coverage <= 0.0 and not any(
-            token in qi.doc_sets[index] for token in analysis.tokens
+            qi.has_term(index, token) for token in analysis.tokens
         ):
             continue
 

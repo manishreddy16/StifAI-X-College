@@ -34,6 +34,7 @@ import math
 import os
 import re
 import unicodedata
+from array import array
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -284,10 +285,11 @@ class QualityIndex:
     synonyms: SynonymMap
     body_bm25: Any
     meta_bm25: Any
-    body_tokens: list[list[str]]
-    doc_sets: list[frozenset]
-    meta_sets: list[frozenset]
-    idf: dict[str, float]
+    vocabulary: dict[str, int]
+    body_tokens: _CompactRows
+    doc_sets: _CompactRows
+    meta_sets: _CompactRows
+    idf: array
     idf_max: float
     n_chunks: int
 
@@ -297,34 +299,77 @@ class QualityIndex:
     def build(cls, chunks: Sequence[dict], bm25_cls: Any, cfg: QualityConfig | None = None,
               synonym_groups: Iterable[Sequence[str]] | None = None) -> "QualityIndex":
         cfg = cfg or QualityConfig.from_env()
-        body_tokens: list[list[str]] = []
-        meta_tokens: list[list[str]] = []
+        # Tokenize once and intern every term across both fields. String tokens
+        # only live for the duration of this build; retained structures use IDs.
+        vocabulary: dict[str, int] = {}
+        compact = (getattr(bm25_cls, "__module__", "").startswith("rank_bm25") and
+                   getattr(bm25_cls, "__name__", "") == "BM25Okapi")
+        body_words: list[list[str]] | None = [] if not compact else None
+        meta_words: list[list[str]] | None = [] if not compact else None
+        def intern(words: list[str]) -> array:
+            ids = array('I')
+            for word in words:
+                token_id = vocabulary.get(word)
+                if token_id is None:
+                    token_id = len(vocabulary)
+                    vocabulary[word] = token_id
+                ids.append(token_id)
+            return ids
+
+        body_ids: list[array] = []
+        meta_ids: list[array] = []
         for chunk in chunks:
             title, text, url = str(chunk.get("title", "")), str(chunk.get("text", "")), str(chunk.get("url", ""))
             if cfg.field_weighting:
-                body_tokens.append(tokenize(text, cfg))
-                meta_tokens.append(tokenize(title, cfg) + url_tokens(url, cfg))
+                body = tokenize(text, cfg)
+                meta = tokenize(title, cfg) + url_tokens(url, cfg)
             else:  # legacy layout: title glued to body, no separate field
-                body_tokens.append(tokenize(f"{title} {text}", cfg))
-                meta_tokens.append([])
-        doc_sets = [frozenset(b) | frozenset(m) for b, m in zip(body_tokens, meta_tokens)]
+                body = tokenize(f"{title} {text}", cfg)
+                meta = []
+            if body_words is not None:
+                body_words.append(body)
+                meta_words.append(meta)
+            body_ids.append(intern(body))
+            meta_ids.append(intern(meta))
         n = len(chunks)
-        df: dict[str, int] = {}
-        for tokens in doc_sets:
-            for term in tokens:
-                df[term] = df.get(term, 0) + 1
-        idf = {t: math.log(1.0 + (n - c + 0.5) / (c + 0.5)) for t, c in df.items()}
+        # Compact per-document unique membership and custom IDF. Sorted IDs
+        # support binary-search membership and set operations.
+        doc_offsets, doc_flat = array('I', [0]), array('I')
+        meta_offsets, meta_flat = array('I', [0]), array('I')
+        df = array('I', [0]) * len(vocabulary)
+        for body, meta in zip(body_ids, meta_ids):
+            all_ids = sorted(set(body).union(meta))
+            for token_id in all_ids:
+                df[token_id] += 1
+            doc_flat.extend(all_ids); doc_offsets.append(len(doc_flat))
+            meta_flat.extend(sorted(set(meta))); meta_offsets.append(len(meta_flat))
+        idf = array('d', (math.log(1.0 + (n - c + 0.5) / (c + 0.5)) for c in df))
         groups = synonym_groups if synonym_groups is not None else load_synonym_groups()
         # rank_bm25 cannot be built from empty documents lists; guard empty metas.
-        meta_corpus = [m if m else ["\u0000"] for m in meta_tokens]
+        body_bm25_ids = [row if row else array('I', [vocabulary.setdefault("\u0000", len(vocabulary))])
+                         for row in body_ids]
+        meta_bm25_ids = [row if row else array('I', [vocabulary.setdefault("\u0000", len(vocabulary))])
+                         for row in meta_ids]
+        if compact:
+            body_index = _CompactBM25(body_bm25_ids, len(vocabulary), n, vocabulary)
+            meta_index = (_CompactBM25(meta_bm25_ids, len(vocabulary), n, vocabulary)
+                          if cfg.field_weighting else None)
+        else:
+            # Keep the documented injection point useful for tests and callers
+            # supplying a compatible custom BM25 implementation.
+            body_index = bm25_cls([row or ["\u0000"] for row in body_words])
+            meta_index = (bm25_cls([row or ["\u0000"] for row in meta_words])
+                          if cfg.field_weighting else None)
+        body_offsets, body_flat = _flatten_ids(body_ids)
         return cls(
             cfg=cfg,
             synonyms=SynonymMap(groups, cfg) if cfg.synonyms else SynonymMap((), cfg),
-            body_bm25=bm25_cls([b if b else ["\u0000"] for b in body_tokens]),
-            meta_bm25=bm25_cls(meta_corpus) if cfg.field_weighting else None,
-            body_tokens=body_tokens,
-            doc_sets=doc_sets,
-            meta_sets=[frozenset(m) for m in meta_tokens],
+            body_bm25=body_index,
+            meta_bm25=meta_index,
+            vocabulary=vocabulary,
+            body_tokens=_CompactRows(body_offsets, body_flat),
+            doc_sets=_CompactRows(doc_offsets, doc_flat),
+            meta_sets=_CompactRows(meta_offsets, meta_flat),
             idf=idf,
             idf_max=math.log(1.0 + (n + 0.5) / 0.5),
             n_chunks=n,
@@ -363,13 +408,18 @@ class QualityIndex:
     # ---- per-candidate signals
 
     def _term_idf(self, term: str) -> float:
-        return self.idf.get(term, self.idf_max)
+        token_id = self.vocabulary.get(term)
+        return self.idf[token_id] if token_id is not None else self.idf_max
 
-    def _matched(self, term: str, doc: frozenset, analysis: QueryAnalysis) -> bool:
-        if term in doc:
+    def _matched(self, term: str, doc: Sequence[int], analysis: QueryAnalysis) -> bool:
+        token_id = self.vocabulary.get(term)
+        if token_id is not None and _contains_id(doc, token_id):
             return True
         for exp in analysis.expansions:
-            if term in exp.source and any(all(t in doc for t in alt) for alt in exp.alternatives):
+            if term in exp.source and any(
+                all((self.vocabulary.get(t) is not None and _contains_id(doc, self.vocabulary[t]))
+                    for t in alt) for alt in exp.alternatives
+            ):
                 return True
         return False
 
@@ -387,18 +437,124 @@ class QualityIndex:
         distinctive = any(self._term_idf(t) >= threshold for t in matched)
         if not distinctive and self.cfg.meta_match_distinctive and self.meta_sets:
             meta = self.meta_sets[index]
-            distinctive = any(t in meta for t in matched)
+            distinctive = any((self.vocabulary.get(t) is not None and
+                               _contains_id(meta, self.vocabulary[t])) for t in matched)
         return got / total, distinctive
+
+    def has_term(self, index: int, term: str) -> bool:
+        token_id = self.vocabulary.get(term)
+        if token_id is None:
+            return False
+        return _contains_id(self.doc_sets[index], token_id)
 
     def phrase_matches(self, index: int, analysis: QueryAnalysis) -> int:
         if not analysis.bigrams:
             return 0
         body = self.body_tokens[index]
         pairs = set(zip(body, body[1:]))
-        return sum(1 for bg in analysis.bigrams if bg in pairs)
+        return sum(1 for a, b in analysis.bigrams
+                   if (self.vocabulary.get(a), self.vocabulary.get(b)) in pairs)
 
     def near_duplicate(self, a: int, b: int) -> bool:
         sa, sb = self.doc_sets[a], self.doc_sets[b]
-        if not sa or not sb:
+        if len(sa) == 0 or len(sb) == 0:
             return False
-        return len(sa & sb) / len(sa | sb) >= self.cfg.near_duplicate_jaccard
+        left, right = set(sa), set(sb)
+        return len(left & right) / len(left | right) >= self.cfg.near_duplicate_jaccard
+
+
+def _flatten_ids(rows: Sequence[Sequence[int]]) -> tuple[array, array]:
+    offsets, flat = array('I', [0]), array('I')
+    for row in rows:
+        flat.extend(row)
+        offsets.append(len(flat))
+    return offsets, flat
+
+
+class _CompactRows:
+    """CSR-style rows preserving the familiar len(rows)/rows[i] interface."""
+    __slots__ = ("offsets", "values")
+    def __init__(self, offsets: array, values: array):
+        self.offsets, self.values = offsets, values
+    def __len__(self) -> int:
+        return len(self.offsets) - 1
+    def __getitem__(self, index: int) -> array:
+        if index < 0:
+            index += len(self)
+        return self.values[self.offsets[index]:self.offsets[index + 1]]
+
+
+def _contains_id(values: Sequence[int], value: int) -> bool:
+    lo, hi = 0, len(values)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if values[mid] < value:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo < len(values) and values[lo] == value
+
+
+class _CompactBM25:
+    """BM25Okapi-equivalent scorer backed by sorted sparse term postings."""
+    def __init__(self, documents: Sequence[Sequence[int]], vocab_size: int, n_docs: int,
+                 vocabulary: dict[str, int],
+                 k1: float = 1.5, b: float = 0.75, epsilon: float = 0.25):
+        import numpy as np
+        self.vocab_size, self.corpus_size = vocab_size, n_docs
+        self.k1, self.b = k1, b
+        self.vocabulary = vocabulary
+        self.doc_len = np.fromiter((len(doc) for doc in documents), dtype=np.int32, count=n_docs)
+        self.avgdl = float(self.doc_len.sum()) / n_docs if n_docs else 0.0
+        # Construct term-major postings in one pass; frequencies are counted
+        # per document, so repeated body terms remain exact.
+        posting_docs = [array('I') for _ in range(vocab_size)]
+        posting_freqs = [array('I') for _ in range(vocab_size)]
+        for doc_id, doc in enumerate(documents):
+            counts: dict[int, int] = {}
+            for term in doc:
+                counts[term] = counts.get(term, 0) + 1
+            for term, count in counts.items():
+                posting_docs[term].append(doc_id)
+                posting_freqs[term].append(count)
+        # Term-major postings as three flat arrays. The nested temporary is
+        # released as each term is flattened.
+        offsets = array('I', [0]); docs_flat = array('I'); freqs_flat = array('I')
+        idfs = array('d')
+        for term in range(vocab_size):
+            term_docs = posting_docs[term]
+            term_freqs = posting_freqs[term]
+            df = len(term_docs)
+            raw_idf = math.log(n_docs - df + 0.5) - math.log(df + 0.5) if df else 0.0
+            idfs.append(raw_idf)
+            docs_flat.extend(term_docs)
+            freqs_flat.extend(term_freqs)
+            offsets.append(len(docs_flat))
+            posting_docs[term] = array('I')
+            posting_freqs[term] = array('I')
+        # rank_bm25 averages IDF only across terms present in this field's
+        # corpus. The shared vocabulary contains terms exclusive to the other
+        # field, so zero-DF vocabulary entries must not enter this average.
+        present_terms = sum(1 for term in range(vocab_size)
+                            if offsets[term] != offsets[term + 1])
+        average = sum(idfs) / present_terms if present_terms else 0.0
+        floor = epsilon * average
+        self.idfs = array('d', (floor if x < 0 else x for x in idfs))
+        self.offsets, self.docs, self.freqs = offsets, docs_flat, freqs_flat
+
+    def get_scores(self, query: Sequence[str]):
+        import numpy as np
+        scores = np.zeros(self.corpus_size)
+        if self.avgdl <= 0:
+            return scores
+        norm = self.k1 * (1.0 - self.b + self.b * self.doc_len / self.avgdl)
+        for term in query:
+            # Vocabulary mapping is installed by QualityIndex.build.
+            term_id = self.vocabulary.get(term)
+            if term_id is None:
+                continue
+            start, end = self.offsets[term_id], self.offsets[term_id + 1]
+            docs = np.frombuffer(self.docs, dtype=np.uint32, count=end-start, offset=start*4)
+            freq = np.frombuffer(self.freqs, dtype=np.uint32, count=end-start, offset=start*4)
+            scores[docs] += self.idfs[term_id] * (freq * (self.k1 + 1) / (freq + norm[docs]))
+        return scores

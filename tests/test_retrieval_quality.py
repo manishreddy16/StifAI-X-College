@@ -253,6 +253,21 @@ class QualityIndexTests(unittest.TestCase):
         self.assertEqual(len(scores), len(CHUNKS))
         self.assertTrue(all(s >= 0 for s in scores))
 
+    def test_compact_bm25_matches_rank_bm25_scores(self):
+        import numpy as np
+        corpus = [rq.tokenize(row["text"], self.qi.cfg) or ["\u0000"] for row in CHUNKS]
+        meta_corpus = [(rq.tokenize(row["title"], self.qi.cfg) +
+                        rq.url_tokens(row["url"], self.qi.cfg)) or ["\u0000"] for row in CHUNKS]
+        reference = _bm25()(corpus)
+        meta_reference = _bm25()(meta_corpus)
+        for query in ("library borrowing", "period library library", "unknown rareword"):
+            actual = self.qi.body_bm25.get_scores(list(self.qi.analyze(query).tokens))
+            expected = reference.get_scores(list(self.qi.analyze(query).tokens))
+            np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+            actual_meta = self.qi.meta_bm25.get_scores(list(self.qi.analyze(query).tokens))
+            expected_meta = meta_reference.get_scores(list(self.qi.analyze(query).tokens))
+            np.testing.assert_allclose(actual_meta, expected_meta, rtol=1e-12, atol=1e-12)
+
     def test_empty_text_chunk_does_not_break_build(self):
         rows = CHUNKS + [{"chunk_id": "e", "doc_id": "e", "title": "", "url": "", "text": ""}]
         qi = rq.QualityIndex.build(rows, _bm25(), rq.QualityConfig(), synonym_groups=())
