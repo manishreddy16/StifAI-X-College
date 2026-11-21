@@ -7,9 +7,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from fastapi import Response
+from fastapi.testclient import TestClient
 
 from api import db
-from api.main import configured_allowed_hosts, configured_cors_origins, enforce_production_database, readiness
+from api.main import (PAGES_FRONTEND_ORIGIN, app, configured_allowed_hosts,
+                      configured_cors_origins, enforce_production_database, readiness)
 
 
 class RuntimeReadinessTests(unittest.TestCase):
@@ -25,11 +27,30 @@ class RuntimeReadinessTests(unittest.TestCase):
 
     def test_cors_accepts_only_explicit_https_or_loopback_origins(self):
         with mock.patch.dict(os.environ, {"STIF_CORS_ORIGINS": "https://app.example.edu, http://localhost:5173"}):
-            self.assertEqual(configured_cors_origins(), ["https://app.example.edu", "http://localhost:5173"])
+            self.assertEqual(configured_cors_origins(), [
+                "https://app.example.edu", "http://localhost:5173", PAGES_FRONTEND_ORIGIN,
+            ])
         for origin in ("*", "http://example.edu", "https://app.example.edu/path", "https://user:pass@app.example.edu"):
             with self.subTest(origin=origin), mock.patch.dict(os.environ, {"STIF_CORS_ORIGINS": origin}):
                 with self.assertRaisesRegex(RuntimeError, "explicit HTTPS origins"):
                     configured_cors_origins()
+
+    def test_pages_origin_is_allowed_for_post_preflight(self):
+        client = TestClient(app)
+        origin_header = {"Origin": PAGES_FRONTEND_ORIGIN}
+        health = client.get("/health", headers=origin_header)
+        self.assertEqual(health.headers["access-control-allow-origin"], PAGES_FRONTEND_ORIGIN)
+
+        response = client.options("/api/v1/chat", headers={
+            **origin_header,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["access-control-allow-origin"], PAGES_FRONTEND_ORIGIN)
+        self.assertEqual(response.headers["access-control-allow-credentials"], "true")
+        self.assertIn("POST", response.headers["access-control-allow-methods"])
+        self.assertIn("content-type", response.headers["access-control-allow-headers"].lower())
 
     def test_host_allowlist_rejects_wildcards_and_malformed_hosts(self):
         with mock.patch.dict(os.environ, {"STIF_ALLOWED_HOSTS": "api.example.edu,localhost"}):

@@ -42,12 +42,15 @@ FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 app = FastAPI(title="STIF.ai SVCE College Assistant", version="0.1.0")
 LOGGER = logging.getLogger(__name__)
+PAGES_FRONTEND_ORIGIN = "https://stifai-x-college.pages.dev"
 
 
 def configured_cors_origins() -> list[str]:
     """Exact browser origins allowed to use credentialed API requests."""
     raw = os.getenv("STIF_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     origins = [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
+    if PAGES_FRONTEND_ORIGIN not in origins:
+        origins.append(PAGES_FRONTEND_ORIGIN)
     for origin in origins:
         try:
             parsed = urlsplit(origin)
